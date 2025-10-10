@@ -54,12 +54,26 @@
 
 #define LOG_PKT_INT 20
 
+#ifdef ANDROID
+typedef enum {
+    NETWORK_TYPE_UNKNOWN = 0,
+    NETWORK_TYPE_WIFI = 1,
+    NETWORK_TYPE_CELLULAR = 2
+} network_type_t;
+#endif
+
 typedef struct conn {
   struct conn *next;
   int fd;
   time_t last_rcvd;
   time_t last_sent;
-  struct sockaddr src;
+  struct sockaddr src;       // Virtual address for SRTLA's internal use
+#ifdef ANDROID
+  struct sockaddr real_src;  // Real network address for actual I/O
+  network_type_t network_type;
+  char virtual_ip[16];
+  char real_ip[16];
+#endif
   int removed;
   int in_flight_pkts;
   int window;
@@ -72,11 +86,102 @@ char *source_ip_file = NULL;
 #ifdef ANDROID
 // Global stop flag for Android - allows graceful shutdown
 static volatile int srtla_should_stop = 0;
+
+// Virtual IP definitions for Application-Level Virtual IPs
+#define VIRTUAL_IP_WIFI     "10.0.1.1"
+#define VIRTUAL_IP_CELLULAR "10.0.2.1" 
+#define VIRTUAL_IP_PREFIX   "10.0."
+
+typedef struct virtual_conn {
+    char virtual_ip[16];          // e.g., "10.0.1.1"
+    char real_ip[16];            // e.g., "172.20.10.2"  
+    network_type_t network_type; // WIFI or CELLULAR
+    int socket_fd;               // Pre-bound network socket from Android
+    struct sockaddr real_addr;   // Real network address
+    struct virtual_conn *next;
+} virtual_conn_t;
+
+static virtual_conn_t *virtual_connections = NULL;
 #endif
 
 int do_update_conns = 0;
 
 struct addrinfo *addrs;
+
+#ifdef ANDROID
+// Virtual IP management functions
+
+// Add a virtual connection mapping
+int add_virtual_connection(const char* virtual_ip, const char* real_ip, 
+                          network_type_t type, int socket_fd) {
+    virtual_conn_t *vc = malloc(sizeof(virtual_conn_t));
+    if (!vc) return -1;
+    
+    memset(vc, 0, sizeof(virtual_conn_t));
+    strncpy(vc->virtual_ip, virtual_ip, sizeof(vc->virtual_ip)-1);
+    strncpy(vc->real_ip, real_ip, sizeof(vc->real_ip)-1);
+    vc->network_type = type;
+    vc->socket_fd = socket_fd;
+    
+    // Parse real IP into sockaddr
+    struct sockaddr_in *addr = (struct sockaddr_in*)&vc->real_addr;
+    addr->sin_family = AF_INET;
+    if (inet_pton(AF_INET, real_ip, &addr->sin_addr) != 1) {
+        free(vc);
+        return -1;
+    }
+    addr->sin_port = htons(0);
+    
+    // Add to linked list
+    vc->next = virtual_connections;
+    virtual_connections = vc;
+    
+    info("Added virtual connection: %s -> %s (type=%d, fd=%d)\n", 
+         virtual_ip, real_ip, type, socket_fd);
+    return 0;
+}
+
+// Find virtual connection by virtual IP
+virtual_conn_t* find_virtual_connection(const char* virtual_ip) {
+    for (virtual_conn_t *vc = virtual_connections; vc != NULL; vc = vc->next) {
+        if (strcmp(vc->virtual_ip, virtual_ip) == 0) {
+            return vc;
+        }
+    }
+    return NULL;
+}
+
+// Check if IP is in virtual range
+int is_virtual_ip(const char* ip) {
+    return strncmp(ip, VIRTUAL_IP_PREFIX, strlen(VIRTUAL_IP_PREFIX)) == 0;
+}
+
+// Convert real IP to virtual IP for SRTLA's internal use
+const char* real_to_virtual_ip(const char* real_ip) {
+    for (virtual_conn_t *vc = virtual_connections; vc != NULL; vc = vc->next) {
+        if (strcmp(vc->real_ip, real_ip) == 0) {
+            return vc->virtual_ip;
+        }
+    }
+    return real_ip; // Fallback to real IP if no mapping found
+}
+
+// Get routing address (real address for network I/O)
+struct sockaddr* get_routing_address(conn_t *c) {
+#ifdef ANDROID
+    if (strlen(c->virtual_ip) > 0) {
+        return &c->real_src;  // Use real address for actual network I/O
+    }
+#endif
+    return &c->src;  // Use original address for non-virtual
+}
+
+// JNI function to receive pre-bound socket from Android
+void srtla_set_network_socket(const char* virtual_ip, const char* real_ip, 
+                             int network_type, int socket_fd) {
+    add_virtual_connection(virtual_ip, real_ip, (network_type_t)network_type, socket_fd);
+}
+#endif
 
 struct sockaddr srtla_addr, srt_addr;
 const socklen_t addr_len = sizeof(srtla_addr);
@@ -485,6 +590,16 @@ int setup_conns(char *source_ip_file) {
         c->fd = -1;
         c->window = WINDOW_DEF * WINDOW_MULT;
 
+#ifdef ANDROID
+        // Check if this is a virtual IP
+        if (is_virtual_ip(line)) {
+          strncpy(c->virtual_ip, line, sizeof(c->virtual_ip)-1);
+          printf("Configured virtual IP: %s\n", c->virtual_ip);
+        } else {
+          c->virtual_ip[0] = '\0';  // Clear virtual IP for real IPs
+        }
+#endif
+
         c->next = conns;
         conns = c;
 
@@ -544,7 +659,31 @@ int open_socket(conn_t *c, int quiet) {
     c->fd = -1;
   }
 
-  // Set up the socket
+#ifdef ANDROID
+  // For Android with virtual IPs, use pre-bound network socket
+  if (strlen(c->virtual_ip) > 0) {
+    virtual_conn_t *vc = find_virtual_connection(c->virtual_ip);
+    if (vc && vc->socket_fd >= 0) {
+      c->fd = vc->socket_fd;
+      c->network_type = vc->network_type;
+      memcpy(&c->real_src, &vc->real_addr, sizeof(c->real_src));
+      strncpy(c->real_ip, vc->real_ip, sizeof(c->real_ip)-1);
+      
+      add_active_fd(c->fd);
+      
+      info("Using pre-bound socket for virtual IP %s -> real IP %s (fd=%d)\n", 
+           c->virtual_ip, c->real_ip, c->fd);
+      return 0;
+    } else {
+      if (!quiet) {
+        err("No pre-bound socket found for virtual IP %s\n", c->virtual_ip);
+      }
+      return -1;
+    }
+  }
+#endif
+
+  // Fallback to original socket creation for non-Android or non-virtual IPs
   int fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
   if (fd < 0) {
     err("Failed to open a socket");
