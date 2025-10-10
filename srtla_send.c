@@ -965,4 +965,49 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   
   return 0;  // Should never reach here due to while(1)
 }
+
+/*
+ * Android stats functions - minimal stats for UI
+ */
+int srtla_get_connection_count(void) {
+  int count = 0;
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (!c->removed) {
+      count++;
+    }
+  }
+  return count;
+}
+
+int srtla_get_active_connection_count(void) {
+  int count = 0;
+  time_t now = time(NULL);
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (!c->removed && !conn_timed_out(c, now)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+int srtla_get_total_in_flight_packets(void) {
+  int total = 0;
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (!c->removed) {
+      total += c->in_flight_pkts;
+    }
+  }
+  return total;
+}
+
+int srtla_get_total_window_size(void) {
+  int total = 0;
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (!c->removed) {
+      total += c->window;
+    }
+  }
+  return total;
+}
+
 #endif // ANDROID
