@@ -30,6 +30,7 @@
 #include <arpa/inet.h>
 
 #include "common.h"
+#include "android_compat.h"  // Android compatibility layer
 
 #define PKT_LOG_SZ 256
 #define CONN_TIMEOUT 4
@@ -792,3 +793,134 @@ int main(int argc, char **argv) {
     }
   } // while(1);
 }
+
+#ifdef ANDROID
+/*
+ * Android-compatible random number generation
+ * Fallback if /dev/urandom is not accessible
+ */
+static int android_get_random(void *buf, size_t len) {
+  FILE *fd = fopen("/dev/urandom", "rb");
+  if (fd != NULL) {
+    size_t result = fread(buf, 1, len, fd);
+    fclose(fd);
+    if (result == len) return 0;
+  }
+  
+  // Fallback: use time-based seed (less secure but functional)
+  srand((unsigned int)time(NULL));
+  unsigned char *bytes = (unsigned char *)buf;
+  for (size_t i = 0; i < len; i++) {
+    bytes[i] = rand() & 0xFF;
+  }
+  return 0;
+}
+
+/*
+ * Android JNI entry point - preserves all original SRTLA functionality
+ * This is identical to main() but callable from JNI
+ */
+int srtla_start_android(const char* listen_port, const char* srtla_host, 
+                       const char* srtla_port, const char* ips_file) {
+  
+  source_ip_file = (char*)ips_file;  // Cast away const for compatibility
+  int conn_count = setup_conns(source_ip_file);
+  if (conn_count <= 0) {
+    printf("Failed to parse any IP addresses in %s\n", source_ip_file);
+    return -1;  // Return error instead of exit()
+  }
+
+  struct sockaddr_in listen_addr;
+
+  int port = parse_port((char*)listen_port);  // Cast for compatibility
+  if (port < 0) {
+    printf("Invalid listen port: %s\n", listen_port);
+    return -1;
+  }
+
+  // Android-compatible random ID generation
+  if (android_get_random(srtla_id, SRTLA_ID_LEN) != 0) {
+    printf("Failed to generate random session ID\n");
+    return -1;
+  }
+
+  FD_ZERO(&active_fds);
+
+  listen_addr.sin_family = AF_INET;
+  listen_addr.sin_addr.s_addr = INADDR_ANY;
+  listen_addr.sin_port = htons(port);
+  listenfd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (listenfd < 0) { 
+    printf("socket creation failed\n");
+    return -1;
+  }
+
+  int ret = bind(listenfd, (struct sockaddr *)&listen_addr, sizeof(listen_addr));
+  if (ret < 0) { 
+    printf("bind failed\n");
+    return -1;
+  }
+  add_active_fd(listenfd);
+
+  int connected = open_conns((char*)srtla_host, (char*)srtla_port);  // Cast for compatibility
+  if (connected < 1) {
+    printf("Failed to open and bind to any of the IP addresses in %s\n", source_ip_file);
+    return -1;
+  }
+
+  // Resolve the address of the receiver
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_DGRAM;
+  ret = getaddrinfo(srtla_host, srtla_port, &hints, &addrs);
+  if (ret != 0) {
+    printf("Failed to resolve %s: %s\n", srtla_host, gai_strerror(ret));
+    return -1;
+  }
+
+  set_srtla_addr(addrs);
+
+  // Skip signal handler setup on Android - not needed for JNI
+  // signal(SIGHUP, schedule_update_conns);
+
+  int info_int = LOG_PKT_INT;
+
+  // Main SRTLA loop - identical to original
+  while(1) {
+    if (do_update_conns) {
+      update_conns(source_ip_file);
+      do_update_conns = 0;
+    }
+
+    connection_housekeeping();
+
+    fd_set read_fds = active_fds;
+    struct timeval to = {.tv_sec = 0, .tv_usec = 200*1000};
+    ret = select(FD_SETSIZE, &read_fds, NULL, NULL, &to);
+
+    if (ret > 0) {
+      if (FD_ISSET(listenfd, &read_fds)) {
+        handle_srt_data(listenfd);
+      }
+
+      for (conn_t *c = conns; c != NULL; c = c->next) {
+        if (c->fd >= 0 && FD_ISSET(c->fd, &read_fds)) {
+          handle_srtla_data(c);
+        }
+      }
+    }
+
+    info_int--;
+    if (info_int == 0) {
+      for (conn_t *c = conns; c != NULL; c = c->next) {
+        debug("%s (%p): in flight: %d, window: %d, last_rcvd %ld\n",
+              print_addr(&c->src), c, c->in_flight_pkts, c->window, c->last_rcvd);
+      }
+      info_int = LOG_PKT_INT;
+    }
+  }
+  
+  return 0;  // Should never reach here due to while(1)
+}
+#endif // ANDROID
