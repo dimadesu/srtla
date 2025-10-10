@@ -1055,12 +1055,14 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
       age = age_rcvd;
     }
     
-    // Add connection details to buffer
+    // Add connection details to buffer with window info
     int written = snprintf(buffer + pos, buffer_size - pos,
-                          "Conn %d: %s\n  FD:%d Active:%s InFlight:%d Window:%d Age:%ds\n",
-                          conn_num, addr_str, c->fd,
-                          is_active ? "YES" : "NO",
-                          c->in_flight_pkts, c->window, age);
+                          "Conn %d: %s\n"
+                          "  Status: %s (FD:%d) Age:%ds\n"
+                          "  Window: %d pkts, %d in-flight\n",
+                          conn_num, addr_str,
+                          is_active ? "ACTIVE" : "INACTIVE", c->fd, age,
+                          c->window, c->in_flight_pkts);
     
     if (written < 0 || pos + written >= buffer_size - 1) {
       break; // Buffer full
