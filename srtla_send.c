@@ -1035,8 +1035,25 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     }
     
     // Calculate connection age and status
-    int age = (c->last_rcvd > 0) ? (int)(now - c->last_rcvd) : -1;
-    int is_active = !conn_timed_out(c, now) ? 1 : 0;
+    int age_rcvd = (c->last_rcvd > 0) ? (int)(now - c->last_rcvd) : -1;
+    int age_sent = (c->last_sent > 0) ? (int)(now - c->last_sent) : -1;
+    
+    // For sender, a connection is active if:
+    // 1. It has a valid file descriptor, OR
+    // 2. It has in-flight packets, OR  
+    // 3. It was recently used for sending
+    int is_active = (c->fd >= 0) || (c->in_flight_pkts > 0) || 
+                    (c->last_sent > 0 && (now - c->last_sent) < CONN_TIMEOUT);
+    
+    // Show the most recent activity (sent or received)
+    int age = -1;
+    if (age_sent >= 0 && age_rcvd >= 0) {
+      age = (age_sent < age_rcvd) ? age_sent : age_rcvd; // Most recent
+    } else if (age_sent >= 0) {
+      age = age_sent;
+    } else if (age_rcvd >= 0) {
+      age = age_rcvd;
+    }
     
     // Add connection details to buffer
     int written = snprintf(buffer + pos, buffer_size - pos,
