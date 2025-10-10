@@ -453,9 +453,11 @@ conn_t *conn_find_by_src(struct sockaddr *src) {
 }
 
 int setup_conns(char *source_ip_file) {
+  printf("Opening IP file: %s\n", source_ip_file);
   FILE *config = fopen(source_ip_file, "r");
   if (config == NULL) {
-    perror("Failed to open the source ip list file: ");
+    printf("Failed to open the source ip list file: %s\n", source_ip_file);
+    perror("Error details");
     exit_help();
   }
 
@@ -468,10 +470,12 @@ int setup_conns(char *source_ip_file) {
       *nl = '\0';
     }
 
+    printf("Parsing IP line: '%s'\n", line);
     struct sockaddr src;
 
     int ret = parse_ip((struct sockaddr_in *)&src, line);
     if (ret == 0) {
+      printf("Successfully parsed IP: %s\n", line);
       conn_t *c = conn_find_by_src(&src);
       if (c == NULL) {
         conn_t *c = calloc(1, sizeof(conn_t));
@@ -490,6 +494,8 @@ int setup_conns(char *source_ip_file) {
       } else {
         c->removed = 0;
       }
+    } else {
+      printf("Failed to parse IP: '%s' (error: %d)\n", line, ret);
     }
   }
   if (line) free(line);
@@ -838,12 +844,27 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   // Reset stop flag
   srtla_should_stop = 0;
   
+  // Clear any existing connections from previous runs
+  while (conns != NULL) {
+    conn_t *next = conns->next;
+    if (conns->fd >= 0) {
+      close(conns->fd);
+    }
+    free(conns);
+    conns = next;
+  }
+  conns = NULL;  // Explicitly ensure it's NULL
+  printf("Cleared existing connections for fresh start\n");
+  
   source_ip_file = (char*)ips_file;  // Cast away const for compatibility
+  printf("About to setup connections from file: %s\n", source_ip_file);
   int conn_count = setup_conns(source_ip_file);
+  printf("setup_conns returned: %d connections\n", conn_count);
   if (conn_count <= 0) {
     printf("Failed to parse any IP addresses in %s\n", source_ip_file);
     return -1;  // Return error instead of exit()
   }
+  printf("Successfully set up %d connections\n", conn_count);
 
   struct sockaddr_in listen_addr;
 
@@ -868,6 +889,12 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   if (listenfd < 0) { 
     printf("socket creation failed\n");
     return -1;
+  }
+
+  // Enable socket reuse to allow binding to the same port immediately after restart
+  int reuse = 1;
+  if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+    printf("setsockopt SO_REUSEADDR failed\n");
   }
 
   int ret = bind(listenfd, (struct sockaddr *)&listen_addr, sizeof(listen_addr));
