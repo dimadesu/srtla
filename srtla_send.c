@@ -69,6 +69,11 @@ typedef struct conn {
 
 char *source_ip_file = NULL;
 
+#ifdef ANDROID
+// Global stop flag for Android - allows graceful shutdown
+static volatile int srtla_should_stop = 0;
+#endif
+
 int do_update_conns = 0;
 
 struct addrinfo *addrs;
@@ -817,11 +822,21 @@ static int android_get_random(void *buf, size_t len) {
 }
 
 /*
+ * Android stop function - sets stop flag for graceful shutdown
+ */
+void srtla_stop_android(void) {
+  srtla_should_stop = 1;
+}
+
+/*
  * Android JNI entry point - preserves all original SRTLA functionality
  * This is identical to main() but callable from JNI
  */
 int srtla_start_android(const char* listen_port, const char* srtla_host, 
                        const char* srtla_port, const char* ips_file) {
+  
+  // Reset stop flag
+  srtla_should_stop = 0;
   
   source_ip_file = (char*)ips_file;  // Cast away const for compatibility
   int conn_count = setup_conns(source_ip_file);
@@ -886,8 +901,8 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
 
   int info_int = LOG_PKT_INT;
 
-  // Main SRTLA loop - identical to original
-  while(1) {
+  // Main SRTLA loop - with stop flag check for Android
+  while(!srtla_should_stop) {
     if (do_update_conns) {
       update_conns(source_ip_file);
       do_update_conns = 0;
