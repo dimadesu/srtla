@@ -1010,4 +1010,48 @@ int srtla_get_total_window_size(void) {
   return total;
 }
 
+// Get detailed per-connection stats formatted as a string
+// Format: "IP:port|fd|active|inflight|window|age\n" for each connection
+int srtla_get_connection_details(char* buffer, int buffer_size) {
+  if (!buffer || buffer_size < 100) {
+    return -1;
+  }
+  
+  time_t now = time(NULL);
+  int pos = 0;
+  int conn_num = 0;
+  
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (c->removed) continue;
+    
+    conn_num++;
+    
+    // Get connection address as string
+    char addr_str[64] = "unknown";
+    if (c->src.sa_family == AF_INET) {
+      struct sockaddr_in* sin = (struct sockaddr_in*)&c->src;
+      snprintf(addr_str, sizeof(addr_str), "%s:%d", 
+               inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+    }
+    
+    // Calculate connection age and status
+    int age = (c->last_rcvd > 0) ? (int)(now - c->last_rcvd) : -1;
+    int is_active = !conn_timed_out(c, now) ? 1 : 0;
+    
+    // Add connection details to buffer
+    int written = snprintf(buffer + pos, buffer_size - pos,
+                          "Conn %d: %s\n  FD:%d Active:%s InFlight:%d Window:%d Age:%ds\n",
+                          conn_num, addr_str, c->fd,
+                          is_active ? "YES" : "NO",
+                          c->in_flight_pkts, c->window, age);
+    
+    if (written < 0 || pos + written >= buffer_size - 1) {
+      break; // Buffer full
+    }
+    pos += written;
+  }
+  
+  return pos; // Return total bytes written
+}
+
 #endif // ANDROID
