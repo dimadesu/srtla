@@ -1273,12 +1273,18 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     
     conn_num++;
     
-    // Get connection address as string
-    char addr_str[64] = "unknown";
+    // Get connection addresses as strings
+    char real_addr_str[64] = "unknown";
+    char virtual_addr_str[64] = "none";
+    
     if (c->src.sa_family == AF_INET) {
       struct sockaddr_in* sin = (struct sockaddr_in*)&c->src;
-      snprintf(addr_str, sizeof(addr_str), "%s:%d", 
+      snprintf(real_addr_str, sizeof(real_addr_str), "%s:%d", 
                inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+    }
+    
+    if (c->virtual_ip[0] != '\0') {
+      snprintf(virtual_addr_str, sizeof(virtual_addr_str), "%s", c->virtual_ip);
     }
     
     // For sender, a connection is active if:
@@ -1337,11 +1343,11 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     
     // Add connection details to buffer with connection type, load info, and individual bitrate
     int written = snprintf(buffer + pos, buffer_size - pos,
-                          "Conn %d: %s (%s)\n"
+                          "Conn %d: %s -> %s (%s)\n"
                           "  Status: %s (FD:%d)\n"
                           "  Bitrate: %.2f Mbps, Load: %d%%\n"
                           "  Window: %d, %d\n",
-                          conn_num, addr_str, conn_type,
+                          conn_num, virtual_addr_str, real_addr_str, conn_type,
                           is_active ? "ACTIVE" : "INACTIVE", c->fd,
                           conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts);
     
