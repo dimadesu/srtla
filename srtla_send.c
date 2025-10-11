@@ -1346,7 +1346,7 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
                           "Conn %d %s\n"
                           "  Status: %s (FD:%d)\n"
                           "  Bitrate: %.2f Mbps, %d%%\n"
-                          "  Window: %d, %d\n",
+                          "  Window: %d, packets in-flight: %d\n",
                           conn_num, conn_type,
                           is_active ? "ACTIVE" : "INACTIVE", c->fd,
                           conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts);
