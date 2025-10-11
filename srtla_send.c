@@ -1345,7 +1345,7 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     int written = snprintf(buffer + pos, buffer_size - pos,
                           "Conn %d %s\n"
                           "  Status: %s (FD:%d)\n"
-                          "  Bitrate: %.2f Mbps, Load: %d%%\n"
+                          "  Bitrate: %.2f Mbps, %d%%\n"
                           "  Window: %d, %d\n",
                           conn_num, conn_type,
                           is_active ? "ACTIVE" : "INACTIVE", c->fd,
