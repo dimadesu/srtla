@@ -88,6 +88,9 @@ typedef struct conn {
   time_t last_rate_update;     // Last time we updated the rate measurement
 } conn_t;
 
+// Forward declaration for bitrate functions
+static void update_connection_bitrate(conn_t *c, uint64_t bytes_sent);
+
 char *source_ip_file = NULL;
 
 #ifdef ANDROID
@@ -347,8 +350,7 @@ void handle_srt_data(int fd) {
     int ret = sendto(c->fd, &buf, n, 0, &srtla_addr, addr_len);
     if (ret == n) {
       // Track bytes sent for bitrate calculation
-      c->bytes_sent_total += n;
-      c->bytes_sent_window += n;
+      update_connection_bitrate(c, n);
       
       if (sn >= 0) {
         reg_pkt(c, sn);
@@ -1155,69 +1157,69 @@ int srtla_get_total_in_flight_packets(void) {
   return total;
 }
 
-// Update bitrate calculations for all connections
-static void update_bitrate_calculations(void) {
+// Update bitrate calculations for a specific connection when bytes are sent
+static void update_connection_bitrate(conn_t *c, uint64_t bytes_sent) {
   time_t now = time(NULL);
   
-  for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (c->removed) continue;
-    
-    // Reset the window if enough time has passed
-    if (now - c->last_rate_update >= BITRATE_WINDOW_SECONDS) {
-      c->bytes_sent_window = 0;
-      c->last_rate_update = now;
-    }
+  // Initialize if this is the first time
+  if (c->last_rate_update == 0) {
+    c->last_rate_update = now;
+    c->bytes_sent_window = 0;
+    c->bytes_sent_total = 0;
+  }
+  
+  // Always add bytes to totals
+  c->bytes_sent_total += bytes_sent;
+  c->bytes_sent_window += bytes_sent;
+  
+  // Reset window periodically to keep it manageable
+  if (now - c->last_rate_update >= BITRATE_WINDOW_SECONDS) {
+    // Keep a rolling window: reset but keep some recent data
+    c->bytes_sent_window = c->bytes_sent_window / 2;  // Keep half the data
+    c->last_rate_update = now;
   }
 }
 
 // Calculate total bitrate across all connections (in Mbps)
 static double calculate_total_bitrate(void) {
-  update_bitrate_calculations();
-  
   uint64_t total_bytes = 0;
-  time_t now = time(NULL);
+  int conn_count = 0;
   
+  // Simple approach: sum up total bytes sent across all active connections
+  // and estimate rate based on total bytes and connection activity
   for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (c->removed || conn_timed_out(c, now)) continue;
+    if (c->removed || c->bytes_sent_total == 0) continue;
     
-    // Only count bytes from active connections in current window
-    time_t window_age = now - c->last_rate_update;
-    if (window_age < BITRATE_WINDOW_SECONDS && c->bytes_sent_window > 0) {
-      total_bytes += c->bytes_sent_window;
-    }
+    // Include any connection that has sent data recently
+    total_bytes += c->bytes_sent_window;
+    conn_count++;
   }
   
-  // Convert bytes per window to Mbps
-  // bytes_per_window / window_seconds * 8 (bits) / 1000000 (Mbps)
-  return (total_bytes * 8.0) / (BITRATE_WINDOW_SECONDS * 1000000.0);
+  if (total_bytes == 0 || conn_count == 0) {
+    return 0.0;
+  }
+  
+  // Estimate bitrate: assume data was sent over the measurement window
+  double bytes_per_sec = (double)total_bytes / BITRATE_WINDOW_SECONDS;
+  double mbps = (bytes_per_sec * 8.0) / (1024.0 * 1024.0);
+  
+  return mbps;
 }
 
 // Calculate load percentage for a specific connection
 static int calculate_connection_load_percentage(conn_t *c) {
-  if (c->removed) return 0;
-  
-  time_t now = time(NULL);
-  if (conn_timed_out(c, now)) return 0;
-  
-  time_t window_age = now - c->last_rate_update;
-  if (window_age >= BITRATE_WINDOW_SECONDS || c->bytes_sent_window == 0) {
-    return 0;
-  }
+  if (c->removed || c->bytes_sent_window == 0) return 0;
   
   // Calculate total bytes across all active connections
   uint64_t total_bytes = 0;
   for (conn_t *other = conns; other != NULL; other = other->next) {
-    if (other->removed || conn_timed_out(other, now)) continue;
-    
-    time_t other_window_age = now - other->last_rate_update;
-    if (other_window_age < BITRATE_WINDOW_SECONDS && other->bytes_sent_window > 0) {
-      total_bytes += other->bytes_sent_window;
-    }
+    if (other->removed) continue;
+    total_bytes += other->bytes_sent_window;
   }
   
   if (total_bytes == 0) return 0;
   
-  // Return percentage
+  // Return percentage based on simple ratio
   return (int)((c->bytes_sent_window * 100) / total_bytes);
 }
 
@@ -1314,7 +1316,7 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     // Calculate load percentage for this connection
     int load_percentage = calculate_connection_load_percentage(c);
     
-    // Add connection details to buffer with connection type, load, and window info
+    // Add connection details to buffer with connection type and load info
     int written = snprintf(buffer + pos, buffer_size - pos,
                           "Conn %d: %s (%s)\n"
                           "  Status: %s (FD:%d) Age:%ds\n"
