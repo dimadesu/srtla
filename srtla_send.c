@@ -91,6 +91,9 @@ typedef struct conn {
 
 // Forward declaration for bitrate functions
 static void update_connection_bitrate(conn_t *c, uint64_t bytes_sent);
+static void update_individual_connection_bitrate(conn_t *c);
+static double calculate_total_bitrate(void);
+static int calculate_connection_load_percentage(conn_t *c);
 
 char *source_ip_file = NULL;
 
@@ -1334,14 +1337,18 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     // Calculate load percentage for this connection
     int load_percentage = calculate_connection_load_percentage(c);
     
-    // Add connection details to buffer with connection type and load info
+    // Convert connection bitrate to Mbps for display
+    double conn_bitrate_mbps = c->current_bitrate_bps / (1000.0 * 1000.0);
+    
+    // Add connection details to buffer with connection type, load info, and individual bitrate
     int written = snprintf(buffer + pos, buffer_size - pos,
                           "Conn %d: %s (%s)\n"
                           "  Status: %s (FD:%d) Age:%ds\n"
-                          "  Load: %d%%, Window: %d pkts, %d in-flight\n",
+                          "  Bitrate: %.2f Mbps, Load: %d%%\n"
+                          "  Window: %d pkts, %d in-flight\n",
                           conn_num, addr_str, conn_type,
                           is_active ? "ACTIVE" : "INACTIVE", c->fd, age,
-                          load_percentage, c->window, c->in_flight_pkts);
+                          conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts);
     
     if (written < 0 || pos + written >= buffer_size - 1) {
       break; // Buffer full
@@ -1350,6 +1357,61 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
   }
   
   return pos; // Return total bytes written
+}
+
+// Get individual connection bitrates for Android UI
+// Returns number of connections, fills arrays with connection info
+// Arrays must be pre-allocated with at least max_connections elements
+int srtla_get_connection_bitrates(double* bitrates_mbps, char connection_types[][16], 
+                                  char connection_ips[][64], int* load_percentages,
+                                  int max_connections) {
+  if (!bitrates_mbps || !connection_types || !connection_ips || !load_percentages) {
+    return -1;
+  }
+  
+  int conn_count = 0;
+  time_t now = time(NULL);
+  
+  // Update all connection bitrates first
+  for (conn_t *c = conns; c != NULL && conn_count < max_connections; c = c->next) {
+    if (c->removed) continue;
+    
+    update_individual_connection_bitrate(c);
+    
+    // Convert bitrate to Mbps
+    bitrates_mbps[conn_count] = c->current_bitrate_bps / (1000.0 * 1000.0);
+    
+    // Get connection type
+    const char* conn_type = "UNKNOWN";
+    if (c->virtual_ip[0] != '\0') {
+      if (strcmp(c->virtual_ip, "10.0.1.1") == 0) {
+        conn_type = "WIFI";
+      } else if (strcmp(c->virtual_ip, "10.0.2.1") == 0) {
+        conn_type = "CELLULAR";
+      } else if (strcmp(c->virtual_ip, "10.0.3.1") == 0) {
+        conn_type = "ETHERNET";
+      }
+    }
+    strncpy(connection_types[conn_count], conn_type, 15);
+    connection_types[conn_count][15] = '\0';
+    
+    // Get connection IP
+    char addr_str[64] = "unknown";
+    if (c->src.sa_family == AF_INET) {
+      struct sockaddr_in* sin = (struct sockaddr_in*)&c->src;
+      snprintf(addr_str, sizeof(addr_str), "%s:%d", 
+               inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+    }
+    strncpy(connection_ips[conn_count], addr_str, 63);
+    connection_ips[conn_count][63] = '\0';
+    
+    // Get load percentage
+    load_percentages[conn_count] = calculate_connection_load_percentage(c);
+    
+    conn_count++;
+  }
+  
+  return conn_count;
 }
 
 #endif // ANDROID
