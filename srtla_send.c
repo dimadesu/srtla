@@ -55,7 +55,7 @@
 #define LOG_PKT_INT 20
 
 // Bitrate calculation constants
-#define BITRATE_WINDOW_SECONDS 5  // Calculate bitrate over 5-second window
+#define BITRATE_UPDATE_INTERVAL_SECONDS 2  // Update bitrate every 2 seconds (matching Java)
 
 #ifdef ANDROID
 typedef enum {
@@ -82,10 +82,11 @@ typedef struct conn {
   int window;
   int pkt_idx;
   int pkt_log[PKT_LOG_SZ];
-  // Bitrate tracking
+  // Bitrate tracking (matching Java implementation)
   uint64_t bytes_sent_total;
-  uint64_t bytes_sent_window;  // Bytes sent in current measurement window
+  uint64_t bytes_sent_window;  // Last bytes snapshot for difference calculation
   time_t last_rate_update;     // Last time we updated the rate measurement
+  double current_bitrate_bps;  // Current bitrate in bits per second
 } conn_t;
 
 // Forward declaration for bitrate functions
@@ -1159,68 +1160,85 @@ int srtla_get_total_in_flight_packets(void) {
 
 // Update bitrate calculations for a specific connection when bytes are sent
 static void update_connection_bitrate(conn_t *c, uint64_t bytes_sent) {
-  time_t now = time(NULL);
-  
   // Initialize if this is the first time
   if (c->last_rate_update == 0) {
-    c->last_rate_update = now;
-    c->bytes_sent_window = 0;
+    c->last_rate_update = time(NULL);
+    c->bytes_sent_window = 0;  // This will store last snapshot for difference calculation
     c->bytes_sent_total = 0;
   }
   
-  // Always add bytes to totals
+  // Always add bytes to total
   c->bytes_sent_total += bytes_sent;
-  c->bytes_sent_window += bytes_sent;
+}
+
+// Update individual connection bitrate (matching Java's updateUploadSpeed method)
+static void update_individual_connection_bitrate(conn_t *c) {
+  if (!c || c->removed) return;
   
-  // Reset window periodically to keep it manageable
-  if (now - c->last_rate_update >= BITRATE_WINDOW_SECONDS) {
-    // Keep a rolling window: reset but keep some recent data
-    c->bytes_sent_window = c->bytes_sent_window / 2;  // Keep half the data
+  time_t now = time(NULL);
+  time_t time_diff = now - c->last_rate_update;
+  
+  // Update every 2 seconds like Java implementation
+  if (time_diff >= 2) {
+    uint64_t bytes_diff = c->bytes_sent_total - c->bytes_sent_window;
+    
+    if (time_diff > 0) {
+      // Exact same calculation as Java: (bytesDiff * 8 * 1000.0) / timeDiff
+      // Note: Using seconds instead of milliseconds, so no need for *1000
+      c->current_bitrate_bps = (bytes_diff * 8.0) / time_diff;
+      
+      printf("SRTLA: Connection fd=%d speed update: %llu bytes in %ld sec = %.1f bps\n", 
+             c->fd, (unsigned long long)bytes_diff, (long)time_diff, c->current_bitrate_bps);
+    }
+    
     c->last_rate_update = now;
+    c->bytes_sent_window = c->bytes_sent_total; // Store current total as snapshot
   }
 }
 
-// Calculate total bitrate across all connections (in Mbps)
+// Calculate total bitrate across all connections (matching Java approach)
 static double calculate_total_bitrate(void) {
-  uint64_t total_bytes = 0;
-  int conn_count = 0;
+  double total_bitrate = 0.0;
   
-  // Simple approach: sum up total bytes sent across all active connections
-  // and estimate rate based on total bytes and connection activity
+  // First update all connection bitrates
   for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (c->removed || c->bytes_sent_total == 0) continue;
-    
-    // Include any connection that has sent data recently
-    total_bytes += c->bytes_sent_window;
-    conn_count++;
+    if (!c->removed) {
+      update_individual_connection_bitrate(c);
+    }
   }
   
-  if (total_bytes == 0 || conn_count == 0) {
-    return 0.0;
+  // Sum bitrates from active connections (matching Java totalBitrate += conn.getUploadSpeed())
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (!c->removed) {
+      total_bitrate += c->current_bitrate_bps;
+      printf("SRTLA: Connection fd=%d contributing %.1f bps to total\n", 
+             c->fd, c->current_bitrate_bps);
+    }
   }
   
-  // Estimate bitrate: assume data was sent over the measurement window
-  double bytes_per_sec = (double)total_bytes / BITRATE_WINDOW_SECONDS;
-  double mbps = (bytes_per_sec * 8.0) / (1024.0 * 1024.0);
+  // Convert to Mbps for display
+  double mbps = total_bitrate / (1000.0 * 1000.0);
+  
+  printf("SRTLA: Total bitrate calculated: %.1f bps (%.2f Mbps)\n", total_bitrate, mbps);
   
   return mbps;
 }
 
 // Calculate load percentage for a specific connection
 static int calculate_connection_load_percentage(conn_t *c) {
-  if (c->removed || c->bytes_sent_window == 0) return 0;
+  if (c->removed || c->current_bitrate_bps == 0) return 0;
   
-  // Calculate total bytes across all active connections
-  uint64_t total_bytes = 0;
+  // Calculate total bitrate across all active connections
+  double total_bitrate = 0.0;
   for (conn_t *other = conns; other != NULL; other = other->next) {
     if (other->removed) continue;
-    total_bytes += other->bytes_sent_window;
+    total_bitrate += other->current_bitrate_bps;
   }
   
-  if (total_bytes == 0) return 0;
+  if (total_bitrate == 0) return 0;
   
-  // Return percentage based on simple ratio
-  return (int)((c->bytes_sent_window * 100) / total_bytes);
+  // Return percentage based on bitrate ratio
+  return (int)((c->current_bitrate_bps * 100.0) / total_bitrate);
 }
 
 // Get detailed per-connection stats formatted as a string
