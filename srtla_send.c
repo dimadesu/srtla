@@ -1184,12 +1184,53 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
       age = age_rcvd;
     }
     
-    // Add connection details to buffer with window info
+    // Determine connection type based on virtual IP or real IP
+    const char* conn_type = "UNKNOWN";
+    if (c->virtual_ip[0] != '\0') {
+      // Use virtual IP to determine type
+      if (strcmp(c->virtual_ip, "10.0.1.1") == 0) {
+        conn_type = "WIFI";
+      } else if (strcmp(c->virtual_ip, "10.0.2.1") == 0) {
+        conn_type = "CELLULAR";
+      } else if (strcmp(c->virtual_ip, "10.0.3.1") == 0) {
+        conn_type = "ETHERNET";
+      }
+    } else {
+      // Fallback: try to guess from real IP patterns
+      if (c->src.sa_family == AF_INET) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)&c->src;
+        uint32_t ip = ntohl(sin->sin_addr.s_addr);
+        
+        // Common patterns for connection types
+        if ((ip & 0xFF000000U) == 0x64000000U ||     // 100.x.x.x (carrier-grade NAT)
+            (ip & 0xFF000000U) == 0x0B000000U) {     // 11.x.x.x (some carriers)
+          conn_type = "CELLULAR";
+        } else if ((ip & 0xFFFF0000U) == 0xC0A80000U ||  // 192.168.x.x
+                   (ip & 0xFFF00000U) == 0xAC100000U) {  // 172.16-31.x.x
+          // Common private WiFi ranges
+          conn_type = "WIFI";
+        } else if ((ip & 0xFF000000U) == 0x0A000000U &&  // 10.x.x.x range
+                   (ip & 0xFFFFFF00U) != 0x0A000100U &&  // Not 10.0.1.x (WiFi virtual)
+                   (ip & 0xFFFFFF00U) != 0x0A000200U &&  // Not 10.0.2.x (Cellular virtual)
+                   (ip & 0xFFFFFF00U) != 0x0A000300U) {  // Not 10.0.3.x (Ethernet virtual)
+          // 10.x.x.x but not our virtual IP ranges - likely WiFi
+          conn_type = "WIFI";
+        } else if ((ip & 0xFF000000U) != 0x7F000000U &&  // Not 127.x.x.x (localhost)
+                   (ip & 0xF0000000U) != 0xE0000000U &&  // Not 224-255.x.x.x (multicast/reserved)
+                   ip != 0x00000000U) {                  // Not 0.0.0.0
+          // Public IP - likely Ethernet/wired connection
+          conn_type = "ETHERNET";
+        }
+        // Anything else stays as "UNKNOWN" (localhost, multicast, invalid IPs, etc.)
+      }
+    }
+    
+    // Add connection details to buffer with connection type and window info
     int written = snprintf(buffer + pos, buffer_size - pos,
-                          "Conn %d: %s\n"
+                          "Conn %d: %s (%s)\n"
                           "  Status: %s (FD:%d) Age:%ds\n"
                           "  Window: %d pkts, %d in-flight\n",
-                          conn_num, addr_str,
+                          conn_num, addr_str, conn_type,
                           is_active ? "ACTIVE" : "INACTIVE", c->fd, age,
                           c->window, c->in_flight_pkts);
     
