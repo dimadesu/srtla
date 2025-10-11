@@ -1139,16 +1139,6 @@ int srtla_get_total_in_flight_packets(void) {
   return total;
 }
 
-int srtla_get_total_window_size(void) {
-  int total = 0;
-  for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (!c->removed) {
-      total += c->window;
-    }
-  }
-  return total;
-}
-
 // Get detailed per-connection stats formatted as a string
 // Format: "IP:port|fd|active|inflight|window|age\n" for each connection
 int srtla_get_connection_details(char* buffer, int buffer_size) {
