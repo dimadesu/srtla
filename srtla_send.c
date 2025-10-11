@@ -1281,26 +1281,12 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
                inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
     }
     
-    // Calculate connection age and status
-    int age_rcvd = (c->last_rcvd > 0) ? (int)(now - c->last_rcvd) : -1;
-    int age_sent = (c->last_sent > 0) ? (int)(now - c->last_sent) : -1;
-    
     // For sender, a connection is active if:
     // 1. It has a valid file descriptor, OR
     // 2. It has in-flight packets, OR  
     // 3. It was recently used for sending
     int is_active = (c->fd >= 0) || (c->in_flight_pkts > 0) || 
                     (c->last_sent > 0 && (now - c->last_sent) < CONN_TIMEOUT);
-    
-    // Show the most recent activity (sent or received)
-    int age = -1;
-    if (age_sent >= 0 && age_rcvd >= 0) {
-      age = (age_sent < age_rcvd) ? age_sent : age_rcvd; // Most recent
-    } else if (age_sent >= 0) {
-      age = age_sent;
-    } else if (age_rcvd >= 0) {
-      age = age_rcvd;
-    }
     
     // Determine connection type based on virtual IP or real IP
     const char* conn_type = "UNKNOWN";
@@ -1352,11 +1338,11 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     // Add connection details to buffer with connection type, load info, and individual bitrate
     int written = snprintf(buffer + pos, buffer_size - pos,
                           "Conn %d: %s (%s)\n"
-                          "  Status: %s (FD:%d) Age:%ds\n"
+                          "  Status: %s (FD:%d)\n"
                           "  Bitrate: %.2f Mbps, Load: %d%%\n"
                           "  Window: %d, %d\n",
                           conn_num, addr_str, conn_type,
-                          is_active ? "ACTIVE" : "INACTIVE", c->fd, age,
+                          is_active ? "ACTIVE" : "INACTIVE", c->fd,
                           conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts);
     
     if (written < 0 || pos + written >= buffer_size - 1) {
