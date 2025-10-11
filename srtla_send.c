@@ -1144,7 +1144,16 @@ int srtla_get_active_connection_count(void) {
   int count = 0;
   time_t now = time(NULL);
   for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (!c->removed && !conn_timed_out(c, now)) {
+    if (c->removed) continue;
+    
+    // For sender, a connection is active if:
+    // 1. It has a valid file descriptor, OR
+    // 2. It has in-flight packets, OR  
+    // 3. It was recently used for sending
+    int is_active = (c->fd >= 0) || (c->in_flight_pkts > 0) || 
+                    (c->last_sent > 0 && (now - c->last_sent) < CONN_TIMEOUT);
+    
+    if (is_active) {
       count++;
     }
   }
