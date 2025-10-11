@@ -1414,4 +1414,64 @@ int srtla_get_connection_bitrates(double* bitrates_mbps, char connection_types[]
   return conn_count;
 }
 
+// Get comprehensive connection data for UI visualization
+// Returns number of connections, fills arrays with all connection info needed for ConnectionWindowData
+int srtla_get_connection_window_data(double* bitrates_mbps, char connection_types[][16], 
+                                    char connection_ips[][64], int* load_percentages,
+                                    int* window_sizes, int* inflight_packets,
+                                    int max_connections) {
+  if (!bitrates_mbps || !connection_types || !connection_ips || !load_percentages || 
+      !window_sizes || !inflight_packets) {
+    return -1;
+  }
+  
+  int conn_count = 0;
+  time_t now = time(NULL);
+  
+  // Update all connection bitrates first
+  for (conn_t *c = conns; c != NULL && conn_count < max_connections; c = c->next) {
+    if (c->removed) continue;
+    
+    update_individual_connection_bitrate(c);
+    
+    // Convert bitrate to Mbps
+    bitrates_mbps[conn_count] = c->current_bitrate_bps / (1000.0 * 1000.0);
+    
+    // Get actual window size and in-flight packets from native data
+    window_sizes[conn_count] = c->window;
+    inflight_packets[conn_count] = c->in_flight_pkts;
+    
+    // Get connection type
+    const char* conn_type = "UNKNOWN";
+    if (c->virtual_ip[0] != '\0') {
+      if (strcmp(c->virtual_ip, "10.0.1.1") == 0) {
+        conn_type = "WIFI";
+      } else if (strcmp(c->virtual_ip, "10.0.2.1") == 0) {
+        conn_type = "CELLULAR";
+      } else if (strcmp(c->virtual_ip, "10.0.3.1") == 0) {
+        conn_type = "ETHERNET";
+      }
+    }
+    strncpy(connection_types[conn_count], conn_type, 15);
+    connection_types[conn_count][15] = '\0';
+    
+    // Get connection IP
+    char addr_str[64] = "unknown";
+    if (c->src.sa_family == AF_INET) {
+      struct sockaddr_in* sin = (struct sockaddr_in*)&c->src;
+      snprintf(addr_str, sizeof(addr_str), "%s:%d", 
+               inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+    }
+    strncpy(connection_ips[conn_count], addr_str, 63);
+    connection_ips[conn_count][63] = '\0';
+    
+    // Get load percentage
+    load_percentages[conn_count] = calculate_connection_load_percentage(c);
+    
+    conn_count++;
+  }
+  
+  return conn_count;
+}
+
 #endif // ANDROID
