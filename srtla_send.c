@@ -1343,12 +1343,12 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     
     // Add connection details to buffer with connection type, load info, and individual bitrate
     int written = snprintf(buffer + pos, buffer_size - pos,
-                          "\n\nConnection %d: %s\n"
+                          "\n\n%s\n"
                           "  Status: %s (FD:%d)\n"
                           "  Bitrate: %.2f Mbps %d%%\n"
                           "  Window: %d\n"
                           "  Packets in-flight: %d",
-                          conn_num, conn_type,
+                          conn_type,
                           is_active ? "ACTIVE" : "INACTIVE", c->fd,
                           conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts);
     
