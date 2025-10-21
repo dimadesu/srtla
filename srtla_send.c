@@ -1266,7 +1266,7 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
   
   // Add total bitrate header
   double total_bitrate = calculate_total_bitrate();
-  pos += snprintf(buffer + pos, buffer_size - pos, "Total Bitrate: %.1f Mbps\n\n", total_bitrate);
+  pos += snprintf(buffer + pos, buffer_size - pos, "Total bitrate: %.1f Mbps", total_bitrate);
   
   for (conn_t *c = conns; c != NULL; c = c->next) {
     if (c->removed) continue;
@@ -1343,12 +1343,11 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     
     // Add connection details to buffer with connection type, load info, and individual bitrate
     int written = snprintf(buffer + pos, buffer_size - pos,
-                          "Conn %d %s\n"
-                          "  Status: %s (FD:%d)\n"
-                          "  Bitrate: %.2f Mbps, %d%%\n"
-                          "  Window: %d, packets in-flight: %d\n",
-                          conn_num, conn_type,
-                          is_active ? "ACTIVE" : "INACTIVE", c->fd,
+                          "\n\n%s\n"
+                          "  Bitrate: %.2f Mbps %d%%\n"
+                          "  Window: %d\n"
+                          "  Packets in-flight: %d",
+                          conn_type,
                           conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts);
     
     if (written < 0 || pos + written >= buffer_size - 1) {
