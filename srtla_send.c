@@ -845,8 +845,8 @@ void connection_housekeeping() {
       if (has_connected) {
         err("Failed to re-establish any connections to %s\n",
             print_addr(&srtla_addr));
-        // For Android, return error instead of exit
         #ifdef __ANDROID__
+        // Return with error code instead of exit for Android
         srtla_should_exit = 1;
         srtla_exit_code = EXIT_FAILURE;
         return;
@@ -864,8 +864,8 @@ void connection_housekeeping() {
         set_srtla_addr(addrs);
         all_failed_at = 0;
       } else {
-        // For Android, return error instead of exit
         #ifdef __ANDROID__
+        // Return with error code instead of exit for Android
         srtla_should_exit = 1;
         srtla_exit_code = EXIT_FAILURE;
         return;
