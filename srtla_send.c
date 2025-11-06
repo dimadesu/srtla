@@ -95,6 +95,9 @@ static void update_individual_connection_bitrate(conn_t *c);
 static double calculate_total_bitrate(void);
 static int calculate_connection_load_percentage(conn_t *c);
 
+// Forward declaration for connection tracking
+void check_connection_established(void);
+
 char *source_ip_file = NULL;
 
 #ifdef ANDROID
