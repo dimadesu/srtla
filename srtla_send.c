@@ -1199,51 +1199,6 @@ int srtla_get_total_window_size(void) {
   return total;
 }
 
-// Add this new function to check if we have any established connections
-int srtla_has_established_connections(void) {
-  for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (!c->removed && c->last_rcvd > 0) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-// Add a function to check if we're currently trying to connect
-int srtla_is_connecting(void) {
-  // We're connecting if:
-  // 1. We have connections configured but none are active yet
-  // 2. We're waiting for REG2/REG3 responses
-  if (!conns) return 0;
-  
-  time_t now = time(NULL);
-  
-  // Check if we have any active connections
-  for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (!c->removed && c->last_rcvd > 0 && !conn_timed_out(c, now)) {
-      return 0;  // We have at least one active connection
-    }
-  }
-  
-  // No active connections - we're trying to connect
-  return 1;
-}
-
-// Add a function to check if connections have failed
-int srtla_connections_failed(void) {
-  if (!conns) return 1;
-  
-  // Check if all connections have failed
-  for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (!c->removed && c->fd >= 0) {
-      // We have at least one connection with an open socket
-      return 0;
-    }
-  }
-  
-  return 1;  // All connections have failed
-}
-
 // Update bitrate calculations for a specific connection when bytes are sent
 static void update_connection_bitrate(conn_t *c, uint64_t bytes_sent) {
   // Initialize if this is the first time
