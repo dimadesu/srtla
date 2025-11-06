@@ -101,6 +101,12 @@ char *source_ip_file = NULL;
 // Global stop flag for Android - allows graceful shutdown
 static volatile int srtla_should_stop = 0;
 
+// Global flags for Android
+#ifdef __ANDROID__
+int srtla_should_exit = 0;
+int srtla_exit_code = 0;
+#endif
+
 // Virtual IP definitions for Application-Level Virtual IPs
 #define VIRTUAL_IP_WIFI     "10.0.1.1"
 #define VIRTUAL_IP_CELLULAR "10.0.2.1" 
@@ -839,7 +845,14 @@ void connection_housekeeping() {
       if (has_connected) {
         err("Failed to re-establish any connections to %s\n",
             print_addr(&srtla_addr));
+        // For Android, return error instead of exit
+        #ifdef __ANDROID__
+        srtla_should_exit = 1;
+        srtla_exit_code = EXIT_FAILURE;
+        return;
+        #else
         exit(EXIT_FAILURE);
+        #endif
       }
 
       err("Failed to establish any initial connections to %s\n",
@@ -851,7 +864,14 @@ void connection_housekeeping() {
         set_srtla_addr(addrs);
         all_failed_at = 0;
       } else {
+        // For Android, return error instead of exit
+        #ifdef __ANDROID__
+        srtla_should_exit = 1;
+        srtla_exit_code = EXIT_FAILURE;
+        return;
+        #else
         exit(EXIT_FAILURE);
+        #endif
       }
     }
   } else {
