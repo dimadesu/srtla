@@ -558,6 +558,11 @@ void handle_srtla_data(conn_t *c) {
       has_connected = 1;
       active_connections++;
       info("%s (%p): connection established\n", print_addr(&c->src), c);
+#ifdef ANDROID
+      // Call the JNI callback to notify that connection is established
+      extern void srtla_on_connection_established(void);
+      srtla_on_connection_established();
+#endif
       return;
   } // switch
 
