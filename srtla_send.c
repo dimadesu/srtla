@@ -1165,15 +1165,8 @@ int srtla_get_active_connection_count(void) {
   time_t now = time(NULL);
   for (conn_t *c = conns; c != NULL; c = c->next) {
     if (c->removed) continue;
-    
-    // For sender, a connection is active if:
-    // 1. It has a valid file descriptor, OR
-    // 2. It has in-flight packets, OR  
-    // 3. It was recently used for sending
-    int is_active = (c->fd >= 0) || (c->in_flight_pkts > 0) || 
-                    (c->last_sent > 0 && (now - c->last_sent) < CONN_TIMEOUT);
-    
-    if (is_active) {
+    // Consider a connection active if it received data in the last 5 seconds
+    if ((now - c->last_rcvd) <= 5) {
       count++;
     }
   }
@@ -1183,11 +1176,29 @@ int srtla_get_active_connection_count(void) {
 int srtla_get_total_in_flight_packets(void) {
   int total = 0;
   for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (!c->removed) {
-      total += c->in_flight_pkts;
-    }
+    if (c->removed) continue;
+    total += c->in_flight_pkts;
   }
   return total;
+}
+
+int srtla_get_total_window_size(void) {
+  int total = 0;
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (c->removed) continue;
+    total += c->window;
+  }
+  return total;
+}
+
+// Add this new function to check if we have any established connections
+int srtla_has_established_connections(void) {
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (!c->removed && c->last_rcvd > 0) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 // Update bitrate calculations for a specific connection when bytes are sent
