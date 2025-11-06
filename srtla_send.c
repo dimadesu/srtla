@@ -1548,4 +1548,23 @@ int srtla_get_connection_window_data(double* bitrates_mbps, char connection_type
   return conn_count;
 }
 
+// Check if connection is established and notify JNI
+void check_connection_established(void) {
+  static int connection_established = 0;
+  
+  if (!connection_established) {
+    // Check if we have any active connections with data
+    for (conn_t *c = conns; c != NULL; c = c->next) {
+      if (!c->removed && c->last_rcvd > 0) {
+        connection_established = 1;
+        // Call the JNI callback to notify connection established
+        extern void srtla_on_connection_established(void);
+        srtla_on_connection_established();
+        debug("Connection established, notifying JNI\n");
+        break;
+      }
+    }
+  }
+}
+
 #endif // ANDROID
