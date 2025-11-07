@@ -217,7 +217,7 @@ conn_t *conns = NULL;
 int listenfd;
 int active_connections = 0;
 int has_connected = 0;
-int is_reconnecting = 0;  // Track if we're in reconnecting state
+volatile int is_reconnecting = 0;  // Track if we're in reconnecting state (volatile for thread safety)
 
 conn_t *pending_reg2_conn = NULL;
 time_t pending_reg_timeout = 0;
