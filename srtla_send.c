@@ -525,8 +525,6 @@ void handle_srtla_data(conn_t *c) {
   }
 
   c->last_rcvd = ts;
-  err("fd=%d: Received packet type=0x%04x, updating last_rcvd=%llu\n", 
-      c->fd, packet_type, (unsigned long long)ts);
 
   switch(packet_type) {
     case SRT_TYPE_ACK: {
@@ -569,7 +567,6 @@ void handle_srtla_data(conn_t *c) {
       has_connected = 1;
       // Clear reconnecting state when connection is re-established  
       is_reconnecting = 0;
-      err("Clearing is_reconnecting=0 (connection re-established)\n");
       active_connections++;
       info("%s (%p): connection established\n", print_addr(&c->src), c);
 #ifdef ANDROID
@@ -819,9 +816,6 @@ void connection_housekeeping() {
     }
 
     int timed_out = conn_timed_out(c, time);
-    err("Connection fd=%d: last_rcvd=%llu, time=%llu, timeout_threshold=%llu, timed_out=%d\n",
-        c->fd, (unsigned long long)c->last_rcvd, (unsigned long long)time, 
-        (unsigned long long)(c->last_rcvd + CONN_TIMEOUT), timed_out);
     
     if (timed_out) {
       /* When we first detect the connection having failed,
@@ -833,7 +827,6 @@ void connection_housekeeping() {
         // Set reconnecting flag when connection fails (if we've ever been connected)
         if (has_connected) {
           is_reconnecting = 1;
-          err("Setting is_reconnecting=1 (connection failed after being connected)\n");
         }
         
         c->last_rcvd = 0;
@@ -1235,8 +1228,6 @@ int srtla_get_active_connection_count(void) {
   for (conn_t *c = conns; c != NULL; c = c->next) {
     if (c->removed) continue;
     time_t diff = now - c->last_rcvd;
-    err("Active check: fd=%d, last_rcvd=%llu, now=%llu, diff=%llu\n",
-        c->fd, (unsigned long long)c->last_rcvd, (unsigned long long)now, (unsigned long long)diff);
     // Consider a connection active if it received data in the last 5 seconds
     if (diff <= 5 && c->last_rcvd > 0) {
       count++;
