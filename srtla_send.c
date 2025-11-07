@@ -857,7 +857,7 @@ void connection_housekeeping() {
       if (has_connected) {
         err("Failed to re-establish any connections to %s\n",
             print_addr(&srtla_addr));
-        #ifdef __ANDROID__
+        #ifdef ANDROID
         // Set flag to exit on Android instead of calling exit()
         srtla_should_stop = 1;
         #else
@@ -874,7 +874,7 @@ void connection_housekeeping() {
           set_srtla_addr(addrs);
           all_failed_at_timestamp = 0;
         } else {
-          #ifdef __ANDROID__
+          #ifdef ANDROID
           // Set flag to exit on Android instead of calling exit()
           srtla_should_stop = 1;
           #else
