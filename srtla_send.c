@@ -863,23 +863,24 @@ void connection_housekeeping() {
         #else
         exit(EXIT_FAILURE);
         #endif
-      }
-
-      err("Failed to establish any initial connections to %s\n",
-          print_addr(&srtla_addr));
-
-      // Walk through the list of resolved addresses
-      if (addrs->ai_next) {
-        addrs = addrs->ai_next;
-        set_srtla_addr(addrs);
-        all_failed_at_timestamp = 0;
       } else {
-        #ifdef __ANDROID__
-        // Set flag to exit on Android instead of calling exit()
-        srtla_should_stop = 1;
-        #else
-        exit(EXIT_FAILURE);
-        #endif
+        // Initial connection failed - try next DNS address
+        err("Failed to establish any initial connections to %s\n",
+            print_addr(&srtla_addr));
+
+        // Walk through the list of resolved addresses
+        if (addrs->ai_next) {
+          addrs = addrs->ai_next;
+          set_srtla_addr(addrs);
+          all_failed_at_timestamp = 0;
+        } else {
+          #ifdef __ANDROID__
+          // Set flag to exit on Android instead of calling exit()
+          srtla_should_stop = 1;
+          #else
+          exit(EXIT_FAILURE);
+          #endif
+        }
       }
     }
   } else {
