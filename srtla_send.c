@@ -1071,6 +1071,8 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   all_failed_at_timestamp = 0;  // Reset failure timestamp
   listenfd = -1;
   pending_reg2_conn = NULL;
+  pending_reg_timeout = 0;  // Reset registration timeout
+  is_reconnecting = 0;  // Reset reconnecting flag
   FD_ZERO(&active_fds);
   
   // Free old DNS resolution if it exists
