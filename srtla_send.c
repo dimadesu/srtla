@@ -1033,6 +1033,7 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   
   // Reset ALL global state for fresh start
   srtla_should_stop = 0;
+  has_connected = 0;  // Reset connection state for new attempt
   listenfd = -1;
   pending_reg2_conn = NULL;
   FD_ZERO(&active_fds);
