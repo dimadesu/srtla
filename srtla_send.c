@@ -836,7 +836,9 @@ void connection_housekeeping() {
 
     /* If a connection has received data in the last CONN_TIMEOUT seconds,
        then it's active */
-    active_connections++;
+    if (c->last_rcvd > 0) {
+      active_connections++;
+    }
 
     if ((c->last_sent + IDLE_TIME) < time) {
       send_keepalive(c);
@@ -846,6 +848,7 @@ void connection_housekeeping() {
   if (active_connections == 0) {
     if (all_failed_at_timestamp == 0) {
       all_failed_at_timestamp = ms;
+      info("All connections failed at timestamp: %llu ms\n", (unsigned long long)all_failed_at_timestamp);
     }
 
     if (has_connected) {
@@ -853,7 +856,11 @@ void connection_housekeeping() {
     }
 
     // Timeout when all connections have failed
-    if (ms > (all_failed_at_timestamp + (GLOBAL_TIMEOUT * 1000))) {
+    uint64_t timeout_ms = all_failed_at_timestamp + (GLOBAL_TIMEOUT * 1000);
+    info("Checking timeout: ms=%llu, timeout_at=%llu, has_connected=%d\n", 
+         (unsigned long long)ms, (unsigned long long)timeout_ms, has_connected);
+    
+    if (ms > timeout_ms) {
       if (has_connected) {
         err("Failed to re-establish any connections to %s\n",
             print_addr(&srtla_addr));
@@ -873,6 +880,7 @@ void connection_housekeeping() {
           addrs = addrs->ai_next;
           set_srtla_addr(addrs);
           all_failed_at_timestamp = 0;
+          info("RESET: Trying next DNS address\n");
         } else {
           #ifdef ANDROID
           // Set flag to exit on Android instead of calling exit()
@@ -885,6 +893,7 @@ void connection_housekeeping() {
     }
   } else {
     all_failed_at_timestamp = 0;
+    info("RESET: active_connections > 0 (count=%d)\n", active_connections);
   }
 
   last_ran = ms;
