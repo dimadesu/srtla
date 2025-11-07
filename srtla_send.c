@@ -521,12 +521,6 @@ void handle_srtla_data(conn_t *c) {
     return;
   }
 
-  /* Don't update last_rcvd for keepalives - they don't prove data path is working */
-  if (packet_type == SRTLA_TYPE_KEEPALIVE) {
-    debug("%s (%p): got a keepalive\n", print_addr(&c->src), c);
-    return;
-  }
-
   c->last_rcvd = ts;
 
   switch(packet_type) {
@@ -565,6 +559,10 @@ void handle_srtla_data(conn_t *c) {
       }
       return;
     }
+
+    case SRTLA_TYPE_KEEPALIVE:
+      debug("%s (%p): got a keepalive\n", print_addr(&c->src), c);
+      return; // don't send to SRT
 
     case SRTLA_TYPE_REG3:
       has_connected = 1;
