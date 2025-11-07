@@ -1158,7 +1158,6 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   // On Android, sockets are created asynchronously by Java network callbacks
   // Don't check open_conns here - just trust that Java will provide them
   printf("Android: Skipping open_conns check, sockets managed by Java\n");
-  int connected = conn_count; // Use setup_conns count
   #else
   int connected = open_conns((char*)srtla_host, (char*)srtla_port);  // Cast for compatibility
   if (connected < 1) {
@@ -1365,7 +1364,6 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     return -1;
   }
   
-  time_t now = time(NULL);
   int pos = 0;
   int conn_num = 0;
   
@@ -1393,12 +1391,6 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     }
     
     // For sender, a connection is active if:
-    // 1. It has a valid file descriptor, OR
-    // 2. It has in-flight packets, OR  
-    // 3. It was recently used for sending
-    int is_active = (c->fd >= 0) || (c->in_flight_pkts > 0) || 
-                    (c->last_sent > 0 && (now - c->last_sent) < CONN_TIMEOUT);
-    
     // Determine connection type based on virtual IP or real IP
     const char* conn_type = "UNKNOWN";
     if (c->virtual_ip[0] != '\0') {
@@ -1475,7 +1467,6 @@ int srtla_get_connection_bitrates(double* bitrates_mbps, char connection_types[]
   }
   
   int conn_count = 0;
-  time_t now = time(NULL);
   
   // Update all connection bitrates first
   for (conn_t *c = conns; c != NULL && conn_count < max_connections; c = c->next) {
@@ -1531,7 +1522,6 @@ int srtla_get_connection_window_data(double* bitrates_mbps, char connection_type
   }
   
   int conn_count = 0;
-  time_t now = time(NULL);
   
   // Update all connection bitrates first
   for (conn_t *c = conns; c != NULL && conn_count < max_connections; c = c->next) {
@@ -1631,14 +1621,4 @@ void srtla_clear_all_sockets() {
   virtual_ip_count = 0;
 }
 
-// Find socket FD for a given virtual IP
-static int find_socket_for_virtual_ip(const char* virtual_ip) {
-  for (int i = 0; i < MAX_VIRTUAL_IPS; i++) {
-    if (virtual_ip_sockets[i].socket_fd >= 0 && 
-        strcmp(virtual_ip_sockets[i].virtual_ip, virtual_ip) == 0) {
-      return virtual_ip_sockets[i].socket_fd;
-    }
-  }
-  return -1;
-}
 #endif // ANDROID
