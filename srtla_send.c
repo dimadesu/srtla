@@ -29,6 +29,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#ifdef ANDROID
+#include <android/log.h>
+#endif
+
 #include "common.h"
 #include "android_compat.h"  // Android compatibility layer
 
@@ -958,41 +962,13 @@ int main(int argc, char **argv) {
   signal(SIGHUP, schedule_update_conns);
 
   int info_int = LOG_PKT_INT;
-  
-#ifdef ANDROID
-  // Track connection timeout for Android
-  time_t start_time = time(NULL);
-  const int CONNECTION_TIMEOUT = 5;  // 5 seconds to establish initial connection
-  int has_connected = 0;
-#endif
 
   while(1) {
-#ifdef ANDROID
     // Check if we should stop
     if (srtla_should_stop) {
       printf("SRTLA stopping as requested\n");
       return 0;
     }
-    
-    // Check if we've established any connection
-    if (!has_connected) {
-      for (conn_t *c = conns; c != NULL; c = c->next) {
-        if (!c->removed && c->last_rcvd > 0) {
-          has_connected = 1;
-          break;
-        }
-      }
-      
-      // If no connection after timeout, return to allow retry
-      if (!has_connected) {
-        time_t now = time(NULL);
-        if ((now - start_time) >= CONNECTION_TIMEOUT) {
-          printf("Connection timeout after %d seconds, will retry\n", CONNECTION_TIMEOUT);
-          return -1;  // Return error to trigger retry
-        }
-      }
-    }
-#endif
     
     if (do_update_conns) {
       update_conns(source_ip_file);
@@ -1150,9 +1126,36 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   // signal(SIGHUP, schedule_update_conns);
 
   int info_int = LOG_PKT_INT;
+  
+  // Track connection timeout - return to allow retry
+  time_t start_time = time(NULL);
+  const int CONNECTION_TIMEOUT = 5;  // 5 seconds to establish initial connection
+  int has_connected = 0;
 
   // Main SRTLA loop - with stop flag check for Android
   while(!srtla_should_stop) {
+    // Check if we've established any connection
+    if (!has_connected) {
+      for (conn_t *c = conns; c != NULL; c = c->next) {
+        if (!c->removed && c->last_rcvd > 0) {
+          has_connected = 1;
+          printf("Connection established!\n");
+          break;
+        }
+      }
+      
+      // If no connection after timeout, return to allow retry
+      if (!has_connected) {
+        time_t now = time(NULL);
+        int elapsed = (int)(now - start_time);
+        
+        if (elapsed >= CONNECTION_TIMEOUT) {
+          printf("Connection timeout after %d seconds, returning for retry\n", CONNECTION_TIMEOUT);
+          return -1;  // Return error to trigger retry
+        }
+      }
+    }
+    
     if (do_update_conns) {
       update_conns(source_ip_file);
       do_update_conns = 0;
