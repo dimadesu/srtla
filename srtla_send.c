@@ -1030,8 +1030,17 @@ void srtla_stop_android(void) {
 int srtla_start_android(const char* listen_port, const char* srtla_host, 
                        const char* srtla_port, const char* ips_file) {
   
-  // Reset stop flag
+  // Reset ALL global state for fresh start
   srtla_should_stop = 0;
+  listenfd = -1;
+  pending_reg2_conn = NULL;
+  FD_ZERO(&active_fds);
+  
+  // Free old DNS resolution if it exists
+  if (addrs != NULL) {
+    freeaddrinfo(addrs);
+    addrs = NULL;
+  }
   
   // Clear any existing connections from previous runs
   while (conns != NULL) {
@@ -1092,11 +1101,18 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   }
   add_active_fd(listenfd);
 
+  #ifdef ANDROID
+  // On Android, sockets are created asynchronously by Java network callbacks
+  // Don't check open_conns here - just trust that Java will provide them
+  printf("Android: Skipping open_conns check, sockets managed by Java\n");
+  int connected = conn_count; // Use setup_conns count
+  #else
   int connected = open_conns((char*)srtla_host, (char*)srtla_port);  // Cast for compatibility
   if (connected < 1) {
     printf("Failed to open and bind to any of the IP addresses in %s\n", source_ip_file);
     return -1;
   }
+  #endif
 
   // Resolve the address of the receiver
   struct addrinfo hints;
