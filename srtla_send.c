@@ -567,7 +567,9 @@ void handle_srtla_data(conn_t *c) {
 
     case SRTLA_TYPE_REG3:
       has_connected = 1;
-      is_reconnecting = 0;  // Reset reconnecting state when connection is re-established
+      // Clear reconnecting state when connection is re-established  
+      is_reconnecting = 0;
+      err("Clearing is_reconnecting=0 (connection re-established)\n");
       active_connections++;
       info("%s (%p): connection established\n", print_addr(&c->src), c);
 #ifdef ANDROID
@@ -831,6 +833,7 @@ void connection_housekeeping() {
         // Set reconnecting flag when connection fails (if we've ever been connected)
         if (has_connected) {
           is_reconnecting = 1;
+          err("Setting is_reconnecting=1 (connection failed after being connected)\n");
         }
         
         c->last_rcvd = 0;
