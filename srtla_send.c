@@ -40,7 +40,11 @@
 #define CONN_TIMEOUT 4
 #define REG2_TIMEOUT 4
 #define REG3_TIMEOUT 4
+#ifdef ANDROID
+#define GLOBAL_TIMEOUT 5  // Faster reconnect detection on Android
+#else
 #define GLOBAL_TIMEOUT 10
+#endif
 #define IDLE_TIME 1
 
 #define SEND_BUF_SIZE (8 * 1024 * 1024)
