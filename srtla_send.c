@@ -112,6 +112,9 @@ char *source_ip_file = NULL;
 // Global stop flag for Android - allows graceful shutdown
 static volatile int srtla_should_stop = 0;
 
+// Forward declaration for FD ownership check (implemented in JNI layer)
+extern int srtla_is_java_owned_fd(int fd);
+
 // Virtual IP definitions for Application-Level Virtual IPs
 #define VIRTUAL_IP_WIFI     "10.0.1.1"
 #define VIRTUAL_IP_CELLULAR "10.0.2.1" 
@@ -1081,8 +1084,22 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   // Clear any existing connections from previous runs
   while (conns != NULL) {
     conn_t *next = conns->next;
-    // Don't close fd - it's managed by Java (would cause fdsan crash)
-    // Java will close it when network callback fires
+    
+#ifdef ANDROID
+    // Only close FDs that native code created, not Java-provided ones
+    if (conns->fd >= 0 && !srtla_is_java_owned_fd(conns->fd)) {
+      printf("Closing native-owned FD %d\n", conns->fd);
+      close(conns->fd);
+    } else if (conns->fd >= 0) {
+      printf("Skipping Java-owned FD %d (will be closed by Java)\n", conns->fd);
+    }
+#else
+    // On non-Android, close all FDs
+    if (conns->fd >= 0) {
+      close(conns->fd);
+    }
+#endif
+    
     free(conns);
     conns = next;
   }
