@@ -108,12 +108,6 @@ char *source_ip_file = NULL;
 // Global stop flag for Android - allows graceful shutdown
 static volatile int srtla_should_stop = 0;
 
-// Global flags for Android
-#ifdef __ANDROID__
-int srtla_should_exit = 0;
-int srtla_exit_code = 0;
-#endif
-
 // Virtual IP definitions for Application-Level Virtual IPs
 #define VIRTUAL_IP_WIFI     "10.0.1.1"
 #define VIRTUAL_IP_CELLULAR "10.0.2.1" 
@@ -858,10 +852,8 @@ void connection_housekeeping() {
         err("Failed to re-establish any connections to %s\n",
             print_addr(&srtla_addr));
         #ifdef __ANDROID__
-        // Return with error code instead of exit for Android
-        srtla_should_exit = 1;
-        srtla_exit_code = EXIT_FAILURE;
-        return;
+        // Set flag to exit on Android instead of calling exit()
+        srtla_should_stop = 1;
         #else
         exit(EXIT_FAILURE);
         #endif
@@ -877,10 +869,8 @@ void connection_housekeeping() {
         all_failed_at = 0;
       } else {
         #ifdef __ANDROID__
-        // Return with error code instead of exit for Android
-        srtla_should_exit = 1;
-        srtla_exit_code = EXIT_FAILURE;
-        return;
+        // Set flag to exit on Android instead of calling exit()
+        srtla_should_stop = 1;
         #else
         exit(EXIT_FAILURE);
         #endif
@@ -1046,9 +1036,8 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   // Clear any existing connections from previous runs
   while (conns != NULL) {
     conn_t *next = conns->next;
-    if (conns->fd >= 0) {
-      close(conns->fd);
-    }
+    // Don't close fd - it's managed by Java (would cause fdsan crash)
+    // Java will close it when network callback fires
     free(conns);
     conns = next;
   }
@@ -1162,7 +1151,9 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
     }
   }
   
-  return 0;  // Should never reach here due to while(1)
+  // If we exit the loop, it means srtla_should_stop was set (failure or user stop)
+  // Return error code for retry
+  return -1;
 }
 
 /*
