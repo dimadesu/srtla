@@ -779,8 +779,10 @@ void send_keepalive(conn_t *c) {
 }
 
 #define HOUSEKEEPING_INT 1000 // ms
+
+static uint64_t all_failed_at_timestamp = 0;  // Track when all connections failed
+
 void connection_housekeeping() {
-  static uint64_t all_failed_at = 0;
   /* We use milliseconds here because with a seconds timer we may be
      resending a second REG2 very soon after the first one, depending
      on when the first execution happens within the seconds interval */
@@ -838,8 +840,8 @@ void connection_housekeeping() {
   }
 
   if (active_connections == 0) {
-    if (all_failed_at == 0) {
-      all_failed_at = ms;
+    if (all_failed_at_timestamp == 0) {
+      all_failed_at_timestamp = ms;
     }
 
     if (has_connected) {
@@ -847,7 +849,7 @@ void connection_housekeeping() {
     }
 
     // Timeout when all connections have failed
-    if (ms > (all_failed_at + (GLOBAL_TIMEOUT * 1000))) {
+    if (ms > (all_failed_at_timestamp + (GLOBAL_TIMEOUT * 1000))) {
       if (has_connected) {
         err("Failed to re-establish any connections to %s\n",
             print_addr(&srtla_addr));
@@ -866,7 +868,7 @@ void connection_housekeeping() {
       if (addrs->ai_next) {
         addrs = addrs->ai_next;
         set_srtla_addr(addrs);
-        all_failed_at = 0;
+        all_failed_at_timestamp = 0;
       } else {
         #ifdef __ANDROID__
         // Set flag to exit on Android instead of calling exit()
@@ -877,7 +879,7 @@ void connection_housekeeping() {
       }
     }
   } else {
-    all_failed_at = 0;
+    all_failed_at_timestamp = 0;
   }
 
   last_ran = ms;
@@ -1034,6 +1036,10 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   // Reset ALL global state for fresh start
   srtla_should_stop = 0;
   has_connected = 0;  // Reset connection state for new attempt
+  active_connections = 0;  // Reset active connection count
+  max_act_fd = -1;  // Reset max file descriptor
+  do_update_conns = 0;  // Reset connection update flag
+  all_failed_at_timestamp = 0;  // Reset failure timestamp
   listenfd = -1;
   pending_reg2_conn = NULL;
   FD_ZERO(&active_fds);
