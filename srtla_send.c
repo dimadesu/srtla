@@ -1015,6 +1015,7 @@ static int android_get_random(void *buf, size_t len) {
   }
   return 0;
 }
+#endif // ANDROID
 
 /*
  * Android stop function - sets stop flag for graceful shutdown
@@ -1539,4 +1540,47 @@ void check_connection_established(void) {
   }
 }
 
+#ifdef ANDROID
+// Virtual IP socket mapping structure
+#define MAX_VIRTUAL_IPS 10
+
+typedef struct {
+  char virtual_ip[INET_ADDRSTRLEN];
+  char real_ip[INET_ADDRSTRLEN];
+  int network_type;  // 0=unknown, 1=wifi, 2=cellular
+  int socket_fd;
+} virtual_ip_socket_t;
+
+static virtual_ip_socket_t virtual_ip_sockets[MAX_VIRTUAL_IPS];
+static int virtual_ip_count = 0;
+
+// Function to clear all virtual IP socket mappings
+void srtla_clear_all_sockets() {
+  printf("Clearing all virtual IP socket mappings\n");
+  for (int i = 0; i < MAX_VIRTUAL_IPS; i++) {
+    if (virtual_ip_sockets[i].socket_fd >= 0) {
+      // Don't close the FD here - Java owns it and will close it
+      printf("Clearing virtual IP socket mapping %d: %s -> %s (fd=%d)\n", 
+             i, virtual_ip_sockets[i].virtual_ip, 
+             virtual_ip_sockets[i].real_ip, 
+             virtual_ip_sockets[i].socket_fd);
+    }
+    virtual_ip_sockets[i].socket_fd = -1;
+    memset(virtual_ip_sockets[i].virtual_ip, 0, sizeof(virtual_ip_sockets[i].virtual_ip));
+    memset(virtual_ip_sockets[i].real_ip, 0, sizeof(virtual_ip_sockets[i].real_ip));
+    virtual_ip_sockets[i].network_type = 0;
+  }
+  virtual_ip_count = 0;
+}
+
+// Find socket FD for a given virtual IP
+static int find_socket_for_virtual_ip(const char* virtual_ip) {
+  for (int i = 0; i < MAX_VIRTUAL_IPS; i++) {
+    if (virtual_ip_sockets[i].socket_fd >= 0 && 
+        strcmp(virtual_ip_sockets[i].virtual_ip, virtual_ip) == 0) {
+      return virtual_ip_sockets[i].socket_fd;
+    }
+  }
+  return -1;
+}
 #endif // ANDROID
