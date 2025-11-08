@@ -1256,6 +1256,10 @@ int srtla_is_reconnecting(void) {
   return is_reconnecting;
 }
 
+void srtla_clear_reconnecting(void) {
+  is_reconnecting = 0;
+}
+
 int srtla_get_total_in_flight_packets(void) {
   int total = 0;
   for (conn_t *c = conns; c != NULL; c = c->next) {
