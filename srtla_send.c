@@ -95,6 +95,10 @@ typedef struct conn {
   uint64_t bytes_sent_window;  // Last bytes snapshot for difference calculation
   time_t last_rate_update;     // Last time we updated the rate measurement
   double current_bitrate_bps;  // Current bitrate in bits per second
+  // RTT tracking
+  struct timespec pkt_send_times[PKT_LOG_SZ];  // Timestamp for each packet
+  double rtt_ms;                                // Current smoothed RTT in milliseconds
+  uint64_t rtt_samples;                         // Number of RTT samples taken
 } conn_t;
 
 // Forward declaration for bitrate functions
@@ -304,6 +308,10 @@ void reg_pkt(conn_t *c, int32_t packet) {
   debug("%s (%p): register packet %d at idx %d\n",
         print_addr(&c->src), c, packet, c->pkt_idx);
   c->pkt_log[c->pkt_idx] = packet;
+  
+  // Record send timestamp for RTT calculation
+  clock_gettime(CLOCK_MONOTONIC, &c->pkt_send_times[c->pkt_idx]);
+  
   c->pkt_idx++;
   c->pkt_idx %= PKT_LOG_SZ;
 
@@ -420,6 +428,8 @@ void register_nak(int32_t packet) {
 
 void register_srtla_ack(int32_t ack) {
   int found = 0;
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
 
   for (conn_t *c = conns; c != NULL; c = c->next) {
     int idx = get_pkt_idx(c->pkt_idx, -1);
@@ -429,6 +439,20 @@ void register_srtla_ack(int32_t ack) {
         if (c->in_flight_pkts > 0) {
           c->in_flight_pkts--;
         }
+        
+        // Calculate RTT for this packet
+        struct timespec *sent_time = &c->pkt_send_times[i];
+        double rtt_sample = (now.tv_sec - sent_time->tv_sec) * 1000.0 +
+                           (now.tv_nsec - sent_time->tv_nsec) / 1000000.0;
+        
+        // Smooth RTT using exponential moving average (90% old, 10% new)
+        if (c->rtt_samples == 0) {
+          c->rtt_ms = rtt_sample;
+        } else {
+          c->rtt_ms = 0.9 * c->rtt_ms + 0.1 * rtt_sample;
+        }
+        c->rtt_samples++;
+        
         c->pkt_log[i] = -1;
 
         if (c->in_flight_pkts*WINDOW_MULT > c->window) {
@@ -1442,14 +1466,23 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     // Convert connection bitrate to Mbps for display
     double conn_bitrate_mbps = c->current_bitrate_bps / (1000.0 * 1000.0);
     
-    // Add connection details to buffer with connection type, load info, and individual bitrate
+    // Format RTT string - show "N/A" if no samples yet
+    char rtt_str[32];
+    if (c->rtt_samples > 0) {
+      snprintf(rtt_str, sizeof(rtt_str), "%.0f ms", c->rtt_ms);
+    } else {
+      snprintf(rtt_str, sizeof(rtt_str), "N/A");
+    }
+    
+    // Add connection details to buffer with connection type, load info, RTT, and individual bitrate
     int written = snprintf(buffer + pos, buffer_size - pos,
                           "\n\n%s\n"
                           "  Bitrate: %.2f Mbps %d%%\n"
                           "  Window: %d\n"
-                          "  Packets in-flight: %d",
+                          "  Packets in-flight: %d\n"
+                          "  RTT: %s",
                           conn_type,
-                          conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts);
+                          conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts, rtt_str);
     
     if (written < 0 || pos + written >= buffer_size - 1) {
       break; // Buffer full
