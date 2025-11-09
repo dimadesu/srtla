@@ -1397,7 +1397,7 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
   
   // Add total bitrate header
   double total_bitrate = calculate_total_bitrate();
-  pos += snprintf(buffer + pos, buffer_size - pos, "Total bitrate: %.1f Mbps", total_bitrate);
+  pos += snprintf(buffer + pos, buffer_size - pos, "Total bitrate: %.2f Mbps", total_bitrate);
   
   for (conn_t *c = conns; c != NULL; c = c->next) {
     if (c->removed) continue;
