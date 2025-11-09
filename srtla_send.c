@@ -29,6 +29,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#ifdef ANDROID
+#include <android/log.h>
+#endif
+
 #include "common.h"
 #include "android_compat.h"  // Android compatibility layer
 
@@ -36,7 +40,11 @@
 #define CONN_TIMEOUT 4
 #define REG2_TIMEOUT 4
 #define REG3_TIMEOUT 4
+#ifdef ANDROID
+#define GLOBAL_TIMEOUT 5  // Faster reconnect detection on Android
+#else
 #define GLOBAL_TIMEOUT 10
+#endif
 #define IDLE_TIME 1
 
 #define SEND_BUF_SIZE (8 * 1024 * 1024)
@@ -95,11 +103,17 @@ static void update_individual_connection_bitrate(conn_t *c);
 static double calculate_total_bitrate(void);
 static int calculate_connection_load_percentage(conn_t *c);
 
+// Forward declaration for connection tracking
+void check_connection_established(void);
+
 char *source_ip_file = NULL;
 
 #ifdef ANDROID
 // Global stop flag for Android - allows graceful shutdown
 static volatile int srtla_should_stop = 0;
+
+// Forward declaration for FD ownership check (implemented in JNI layer)
+extern int srtla_is_java_owned_fd(int fd);
 
 // Virtual IP definitions for Application-Level Virtual IPs
 #define VIRTUAL_IP_WIFI     "10.0.1.1"
@@ -203,6 +217,7 @@ conn_t *conns = NULL;
 int listenfd;
 int active_connections = 0;
 int has_connected = 0;
+volatile int is_reconnecting = 0;  // Track if we're in reconnecting state (volatile for thread safety)
 
 conn_t *pending_reg2_conn = NULL;
 time_t pending_reg_timeout = 0;
@@ -544,14 +559,22 @@ void handle_srtla_data(conn_t *c) {
       }
       return;
     }
+
     case SRTLA_TYPE_KEEPALIVE:
       debug("%s (%p): got a keepalive\n", print_addr(&c->src), c);
       return; // don't send to SRT
 
     case SRTLA_TYPE_REG3:
       has_connected = 1;
+      // Clear reconnecting state when connection is re-established  
+      is_reconnecting = 0;
       active_connections++;
       info("%s (%p): connection established\n", print_addr(&c->src), c);
+#ifdef ANDROID
+      // Call the JNI callback to notify that connection is established
+      extern void srtla_on_connection_established(void);
+      srtla_on_connection_established();
+#endif
       return;
   } // switch
 
@@ -767,8 +790,10 @@ void send_keepalive(conn_t *c) {
 }
 
 #define HOUSEKEEPING_INT 1000 // ms
+
+static uint64_t all_failed_at_timestamp = 0;  // Track when all connections failed
+
 void connection_housekeeping() {
-  static uint64_t all_failed_at = 0;
   /* We use milliseconds here because with a seconds timer we may be
      resending a second REG2 very soon after the first one, depending
      on when the first execution happens within the seconds interval */
@@ -791,12 +816,20 @@ void connection_housekeeping() {
       continue;
     }
 
-    if (conn_timed_out(c, time)) {
+    int timed_out = conn_timed_out(c, time);
+    
+    if (timed_out) {
       /* When we first detect the connection having failed,
          we reset its status and print a message */
       if (c->last_rcvd > 0) {
         info("%s (%p): connection failed, attempting to reconnect\n",
              print_addr(&c->src), c);
+        
+        // Set reconnecting flag when connection fails (if we've ever been connected)
+        if (has_connected) {
+          is_reconnecting = 1;
+        }
+        
         c->last_rcvd = 0;
         c->last_sent = 0;
         c->window = WINDOW_MIN * WINDOW_MULT;
@@ -817,8 +850,10 @@ void connection_housekeeping() {
     }
 
     /* If a connection has received data in the last CONN_TIMEOUT seconds,
-       then it's active */
-    active_connections++;
+       then it's active. Only count connections that have actually received data recently. */
+    if (c->last_rcvd > 0 && (c->last_rcvd + CONN_TIMEOUT) >= time) {
+      active_connections++;
+    }
 
     if ((c->last_sent + IDLE_TIME) < time) {
       send_keepalive(c);
@@ -826,8 +861,9 @@ void connection_housekeeping() {
   }
 
   if (active_connections == 0) {
-    if (all_failed_at == 0) {
-      all_failed_at = ms;
+    if (all_failed_at_timestamp == 0) {
+      all_failed_at_timestamp = ms;
+      info("All connections failed at timestamp: %llu ms\n", (unsigned long long)all_failed_at_timestamp);
     }
 
     if (has_connected) {
@@ -835,27 +871,44 @@ void connection_housekeeping() {
     }
 
     // Timeout when all connections have failed
-    if (ms > (all_failed_at + (GLOBAL_TIMEOUT * 1000))) {
+    uint64_t timeout_ms = all_failed_at_timestamp + (GLOBAL_TIMEOUT * 1000);
+    info("Checking timeout: ms=%llu, timeout_at=%llu, has_connected=%d\n", 
+         (unsigned long long)ms, (unsigned long long)timeout_ms, has_connected);
+    
+    if (ms > timeout_ms) {
       if (has_connected) {
         err("Failed to re-establish any connections to %s\n",
             print_addr(&srtla_addr));
+        #ifdef ANDROID
+        // Set flag to exit on Android instead of calling exit()
+        srtla_should_stop = 1;
+        #else
         exit(EXIT_FAILURE);
-      }
-
-      err("Failed to establish any initial connections to %s\n",
-          print_addr(&srtla_addr));
-
-      // Walk through the list of resolved addresses
-      if (addrs->ai_next) {
-        addrs = addrs->ai_next;
-        set_srtla_addr(addrs);
-        all_failed_at = 0;
+        #endif
       } else {
-        exit(EXIT_FAILURE);
+        // Initial connection failed - try next DNS address
+        err("Failed to establish any initial connections to %s\n",
+            print_addr(&srtla_addr));
+
+        // Walk through the list of resolved addresses
+        if (addrs->ai_next) {
+          addrs = addrs->ai_next;
+          set_srtla_addr(addrs);
+          all_failed_at_timestamp = 0;
+          info("RESET: Trying next DNS address\n");
+        } else {
+          #ifdef ANDROID
+          // Set flag to exit on Android instead of calling exit()
+          srtla_should_stop = 1;
+          #else
+          exit(EXIT_FAILURE);
+          #endif
+        }
       }
     }
   } else {
-    all_failed_at = 0;
+    all_failed_at_timestamp = 0;
+    info("RESET: active_connections > 0 (count=%d)\n", active_connections);
   }
 
   last_ran = ms;
@@ -932,6 +985,12 @@ int main(int argc, char **argv) {
   int info_int = LOG_PKT_INT;
 
   while(1) {
+    // Check if we should stop
+    if (srtla_should_stop) {
+      printf("SRTLA stopping as requested\n");
+      return 0;
+    }
+    
     if (do_update_conns) {
       update_conns(source_ip_file);
       do_update_conns = 0;
@@ -987,6 +1046,7 @@ static int android_get_random(void *buf, size_t len) {
   }
   return 0;
 }
+#endif // ANDROID
 
 /*
  * Android stop function - sets stop flag for graceful shutdown
@@ -1002,15 +1062,44 @@ void srtla_stop_android(void) {
 int srtla_start_android(const char* listen_port, const char* srtla_host, 
                        const char* srtla_port, const char* ips_file) {
   
-  // Reset stop flag
+  // Reset ALL global state for fresh start
   srtla_should_stop = 0;
+  has_connected = 0;  // Reset connection state for new attempt
+  active_connections = 0;  // Reset active connection count
+  max_act_fd = -1;  // Reset max file descriptor
+  do_update_conns = 0;  // Reset connection update flag
+  all_failed_at_timestamp = 0;  // Reset failure timestamp
+  listenfd = -1;
+  pending_reg2_conn = NULL;
+  pending_reg_timeout = 0;  // Reset registration timeout
+  is_reconnecting = 0;  // Reset reconnecting flag
+  FD_ZERO(&active_fds);
+  
+  // Free old DNS resolution if it exists
+  if (addrs != NULL) {
+    freeaddrinfo(addrs);
+    addrs = NULL;
+  }
   
   // Clear any existing connections from previous runs
   while (conns != NULL) {
     conn_t *next = conns->next;
+    
+#ifdef ANDROID
+    // Only close FDs that native code created, not Java-provided ones
+    if (conns->fd >= 0 && !srtla_is_java_owned_fd(conns->fd)) {
+      printf("Closing native-owned FD %d\n", conns->fd);
+      close(conns->fd);
+    } else if (conns->fd >= 0) {
+      printf("Skipping Java-owned FD %d (will be closed by Java)\n", conns->fd);
+    }
+#else
+    // On non-Android, close all FDs
     if (conns->fd >= 0) {
       close(conns->fd);
     }
+#endif
+    
     free(conns);
     conns = next;
   }
@@ -1065,11 +1154,17 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
   }
   add_active_fd(listenfd);
 
+  #ifdef ANDROID
+  // On Android, sockets are created asynchronously by Java network callbacks
+  // Don't check open_conns here - just trust that Java will provide them
+  printf("Android: Skipping open_conns check, sockets managed by Java\n");
+  #else
   int connected = open_conns((char*)srtla_host, (char*)srtla_port);  // Cast for compatibility
   if (connected < 1) {
     printf("Failed to open and bind to any of the IP addresses in %s\n", source_ip_file);
     return -1;
   }
+  #endif
 
   // Resolve the address of the receiver
   struct addrinfo hints;
@@ -1124,7 +1219,9 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
     }
   }
   
-  return 0;  // Should never reach here due to while(1)
+  // If we exit the loop, it means srtla_should_stop was set (failure or user stop)
+  // Return error code for retry
+  return -1;
 }
 
 /*
@@ -1142,30 +1239,41 @@ int srtla_get_connection_count(void) {
 
 int srtla_get_active_connection_count(void) {
   int count = 0;
-  time_t now = time(NULL);
+  time_t now;
+  get_seconds(&now);  // Use same clock as last_rcvd
   for (conn_t *c = conns; c != NULL; c = c->next) {
     if (c->removed) continue;
-    
-    // For sender, a connection is active if:
-    // 1. It has a valid file descriptor, OR
-    // 2. It has in-flight packets, OR  
-    // 3. It was recently used for sending
-    int is_active = (c->fd >= 0) || (c->in_flight_pkts > 0) || 
-                    (c->last_sent > 0 && (now - c->last_sent) < CONN_TIMEOUT);
-    
-    if (is_active) {
+    time_t diff = now - c->last_rcvd;
+    // Consider a connection active if it received data in the last 5 seconds
+    if (diff <= 5 && c->last_rcvd > 0) {
       count++;
     }
   }
   return count;
 }
 
+int srtla_is_reconnecting(void) {
+  return is_reconnecting;
+}
+
+void srtla_clear_reconnecting(void) {
+  is_reconnecting = 0;
+}
+
 int srtla_get_total_in_flight_packets(void) {
   int total = 0;
   for (conn_t *c = conns; c != NULL; c = c->next) {
-    if (!c->removed) {
-      total += c->in_flight_pkts;
-    }
+    if (c->removed) continue;
+    total += c->in_flight_pkts;
+  }
+  return total;
+}
+
+int srtla_get_total_window_size(void) {
+  int total = 0;
+  for (conn_t *c = conns; c != NULL; c = c->next) {
+    if (c->removed) continue;
+    total += c->window;
   }
   return total;
 }
@@ -1260,7 +1368,6 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     return -1;
   }
   
-  time_t now = time(NULL);
   int pos = 0;
   int conn_num = 0;
   
@@ -1288,12 +1395,6 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     }
     
     // For sender, a connection is active if:
-    // 1. It has a valid file descriptor, OR
-    // 2. It has in-flight packets, OR  
-    // 3. It was recently used for sending
-    int is_active = (c->fd >= 0) || (c->in_flight_pkts > 0) || 
-                    (c->last_sent > 0 && (now - c->last_sent) < CONN_TIMEOUT);
-    
     // Determine connection type based on virtual IP or real IP
     const char* conn_type = "UNKNOWN";
     if (c->virtual_ip[0] != '\0') {
@@ -1370,7 +1471,6 @@ int srtla_get_connection_bitrates(double* bitrates_mbps, char connection_types[]
   }
   
   int conn_count = 0;
-  time_t now = time(NULL);
   
   // Update all connection bitrates first
   for (conn_t *c = conns; c != NULL && conn_count < max_connections; c = c->next) {
@@ -1426,7 +1526,6 @@ int srtla_get_connection_window_data(double* bitrates_mbps, char connection_type
   }
   
   int conn_count = 0;
-  time_t now = time(NULL);
   
   // Update all connection bitrates first
   for (conn_t *c = conns; c != NULL && conn_count < max_connections; c = c->next) {
@@ -1472,6 +1571,58 @@ int srtla_get_connection_window_data(double* bitrates_mbps, char connection_type
   }
   
   return conn_count;
+}
+
+// Check if connection is established and notify JNI
+void check_connection_established(void) {
+  static int connection_established = 0;
+  
+  if (!connection_established) {
+    // Check if we have any active connections with data
+    for (conn_t *c = conns; c != NULL; c = c->next) {
+      if (!c->removed && c->last_rcvd > 0) {
+        connection_established = 1;
+        // Call the JNI callback to notify connection established
+        extern void srtla_on_connection_established(void);
+        srtla_on_connection_established();
+        debug("Connection established, notifying JNI\n");
+        break;
+      }
+    }
+  }
+}
+
+#ifdef ANDROID
+// Virtual IP socket mapping structure
+#define MAX_VIRTUAL_IPS 10
+
+typedef struct {
+  char virtual_ip[INET_ADDRSTRLEN];
+  char real_ip[INET_ADDRSTRLEN];
+  int network_type;  // 0=unknown, 1=wifi, 2=cellular
+  int socket_fd;
+} virtual_ip_socket_t;
+
+static virtual_ip_socket_t virtual_ip_sockets[MAX_VIRTUAL_IPS];
+static int virtual_ip_count = 0;
+
+// Function to clear all virtual IP socket mappings
+void srtla_clear_all_sockets() {
+  printf("Clearing all virtual IP socket mappings\n");
+  for (int i = 0; i < MAX_VIRTUAL_IPS; i++) {
+    if (virtual_ip_sockets[i].socket_fd >= 0) {
+      // Don't close the FD here - Java owns it and will close it
+      printf("Clearing virtual IP socket mapping %d: %s -> %s (fd=%d)\n", 
+             i, virtual_ip_sockets[i].virtual_ip, 
+             virtual_ip_sockets[i].real_ip, 
+             virtual_ip_sockets[i].socket_fd);
+    }
+    virtual_ip_sockets[i].socket_fd = -1;
+    memset(virtual_ip_sockets[i].virtual_ip, 0, sizeof(virtual_ip_sockets[i].virtual_ip));
+    memset(virtual_ip_sockets[i].real_ip, 0, sizeof(virtual_ip_sockets[i].real_ip));
+    virtual_ip_sockets[i].network_type = 0;
+  }
+  virtual_ip_count = 0;
 }
 
 #endif // ANDROID
