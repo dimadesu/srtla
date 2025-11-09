@@ -99,6 +99,7 @@ typedef struct conn {
   struct timespec pkt_send_times[PKT_LOG_SZ];  // Timestamp for each packet
   double rtt_ms;                                // Current smoothed RTT in milliseconds
   uint64_t rtt_samples;                         // Number of RTT samples taken
+  time_t last_rtt_update;                       // Last time we received an ACK
 } conn_t;
 
 // Forward declaration for bitrate functions
@@ -452,6 +453,7 @@ void register_srtla_ack(int32_t ack) {
           c->rtt_ms = 0.9 * c->rtt_ms + 0.1 * rtt_sample;
         }
         c->rtt_samples++;
+        c->last_rtt_update = time(NULL);  // Track when we last received an ACK
         
         c->pkt_log[i] = -1;
 
@@ -1466,9 +1468,11 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     // Convert connection bitrate to Mbps for display
     double conn_bitrate_mbps = c->current_bitrate_bps / (1000.0 * 1000.0);
     
-    // Format RTT string - show "N/A" if no samples yet
+    // Format RTT string - show "N/A" if no samples yet or no recent ACKs
     char rtt_str[32];
-    if (c->rtt_samples > 0) {
+    time_t now = time(NULL);
+    if (c->rtt_samples > 0 && (now - c->last_rtt_update) < 5) {
+      // Show RTT only if we've received an ACK in the last 5 seconds
       snprintf(rtt_str, sizeof(rtt_str), "%.0f ms", c->rtt_ms);
     } else {
       snprintf(rtt_str, sizeof(rtt_str), "N/A");
