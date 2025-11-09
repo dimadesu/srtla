@@ -1381,8 +1381,8 @@ static int calculate_connection_load_percentage(conn_t *c) {
   
   if (total_bitrate == 0) return 0;
   
-  // Return percentage based on bitrate ratio
-  return (int)((c->current_bitrate_bps * 100.0) / total_bitrate);
+  // Return percentage based on bitrate ratio (round to nearest integer)
+  return (int)((c->current_bitrate_bps * 100.0) / total_bitrate + 0.5);
 }
 
 // Get detailed per-connection stats formatted as a string
