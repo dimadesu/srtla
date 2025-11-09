@@ -1478,6 +1478,10 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
       snprintf(rtt_str, sizeof(rtt_str), "N/A");
     }
     
+    // Show in-flight packets as 0 if no recent activity (no ACKs in last 5 seconds)
+    // This prevents showing stale packet counts when streaming stops
+    int display_in_flight = (now - c->last_rtt_update) < 5 ? c->in_flight_pkts : 0;
+    
     // Add connection details to buffer with connection type, load info, RTT, and individual bitrate
     int written = snprintf(buffer + pos, buffer_size - pos,
                           "\n\n%s\n"
@@ -1486,7 +1490,7 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
                           "  Packets in-flight: %d\n"
                           "  RTT: %s",
                           conn_type,
-                          conn_bitrate_mbps, load_percentage, c->window, c->in_flight_pkts, rtt_str);
+                          conn_bitrate_mbps, load_percentage, c->window, display_in_flight, rtt_str);
     
     if (written < 0 || pos + written >= buffer_size - 1) {
       break; // Buffer full
@@ -1563,6 +1567,7 @@ int srtla_get_connection_window_data(double* bitrates_mbps, char connection_type
   }
   
   int conn_count = 0;
+  time_t now = time(NULL);
   
   // Update all connection bitrates first
   for (conn_t *c = conns; c != NULL && conn_count < max_connections; c = c->next) {
@@ -1575,7 +1580,8 @@ int srtla_get_connection_window_data(double* bitrates_mbps, char connection_type
     
     // Get actual window size and in-flight packets from native data
     window_sizes[conn_count] = c->window;
-    inflight_packets[conn_count] = c->in_flight_pkts;
+    // Show in-flight as 0 if no recent ACKs (prevents stale data when streaming stops)
+    inflight_packets[conn_count] = (now - c->last_rtt_update) < 5 ? c->in_flight_pkts : 0;
     
     // Get connection type
     const char* conn_type = "UNKNOWN";
