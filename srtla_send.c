@@ -334,8 +334,8 @@ conn_t *select_conn() {
     }
   }
 
-  time_t t;
-  assert(get_seconds(&t) == 0);
+  time_t t = 0;
+  if (get_seconds(&t) != 0) return NULL;
 
   for (conn_t *c = conns; c != NULL; c = c->next) {
     /* If we have some very slow links, we may be better off ignoring them
@@ -403,7 +403,11 @@ int get_pkt_idx(int idx, int increment) {
   idx = idx + increment;
   if (idx < 0) idx += PKT_LOG_SZ;
   idx %= PKT_LOG_SZ;
-  assert(idx >= 0 && idx < PKT_LOG_SZ);
+  // Safety check - should never fail given the math above
+  if (idx < 0 || idx >= PKT_LOG_SZ) {
+    err("get_pkt_idx: idx %d out of bounds [0, %d)\n", idx, PKT_LOG_SZ);
+    return 0;  // Return safe default
+  }
   return idx;
 }
 
@@ -650,7 +654,10 @@ int setup_conns(char *source_ip_file) {
       conn_t *c = conn_find_by_src(&src);
       if (c == NULL) {
         conn_t *c = calloc(1, sizeof(conn_t));
-        assert(c != NULL);
+        if (c == NULL) {
+          err("Failed to allocate memory for connection\n");
+          continue;  // Skip this connection, try next
+        }
 
         c->src = src;
         c->fd = -1;
@@ -824,8 +831,8 @@ void connection_housekeeping() {
      resending a second REG2 very soon after the first one, depending
      on when the first execution happens within the seconds interval */
   static uint64_t last_ran = 0;
-  uint64_t ms;
-  assert(get_ms(&ms) == 0);
+  uint64_t ms = 0;
+  if (get_ms(&ms) != 0) return;  // Failed to get time, skip this iteration
   if ((last_ran + HOUSEKEEPING_INT) > ms) return;
 
   time_t time = (time_t)(ms / 1000);
@@ -965,8 +972,15 @@ int main(int argc, char **argv) {
 
   // Read a random connection group id for this session
   FILE *fd = fopen("/dev/urandom", "rb");
-  assert(fd != NULL);
-  assert(fread(srtla_id, 1, SRTLA_ID_LEN, fd) == SRTLA_ID_LEN);
+  if (fd == NULL) {
+    perror("Failed to open /dev/urandom");
+    exit(EXIT_FAILURE);
+  }
+  if (fread(srtla_id, 1, SRTLA_ID_LEN, fd) != SRTLA_ID_LEN) {
+    perror("Failed to read from /dev/urandom");
+    fclose(fd);
+    exit(EXIT_FAILURE);
+  }
   fclose(fd);
 
   FD_ZERO(&active_fds);
