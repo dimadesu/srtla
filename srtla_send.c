@@ -1121,19 +1121,30 @@ int srtla_start_android(const char* listen_port, const char* srtla_host,
     addrs = NULL;
   }
   
-  // Connections list should already be cleared by srtla_clear_all_sockets() on stop
-  // Just verify it's empty and free any stragglers without closing FDs
-  if (conns != NULL) {
-    printf("Warning: conns list not empty at start, clearing without closing FDs\n");
-    while (conns != NULL) {
-      conn_t *next = conns->next;
-      // Don't close FD - it's either already closed or reused by system
-      free(conns);
-      conns = next;
+  // Clear any existing connections from previous runs
+  while (conns != NULL) {
+    conn_t *next = conns->next;
+    
+#ifdef ANDROID
+    // Only close FDs that native code created, not Java-provided ones
+    if (conns->fd >= 0 && !srtla_is_java_owned_fd(conns->fd)) {
+      printf("Closing native-owned FD %d\n", conns->fd);
+      close(conns->fd);
+    } else if (conns->fd >= 0) {
+      printf("Skipping Java-owned FD %d (will be closed by Java)\n", conns->fd);
     }
+#else
+    // On non-Android, close all FDs
+    if (conns->fd >= 0) {
+      close(conns->fd);
+    }
+#endif
+    
+    free(conns);
+    conns = next;
   }
   conns = NULL;  // Explicitly ensure it's NULL
-  printf("Ready for fresh connection setup\n");
+  printf("Cleared existing connections for fresh start\n");
   
   source_ip_file = (char*)ips_file;  // Cast away const for compatibility
   printf("About to setup connections from file: %s\n", source_ip_file);
@@ -1652,13 +1663,12 @@ typedef struct {
 static virtual_ip_socket_t virtual_ip_sockets[MAX_VIRTUAL_IPS];
 static int virtual_ip_count = 0;
 
-// Function to clear all virtual IP socket mappings AND connection list
-// Called on stop - does NOT close FDs (they're already closed or invalid)
+// Function to clear all virtual IP socket mappings
 void srtla_clear_all_sockets() {
   printf("Clearing all virtual IP socket mappings\n");
   for (int i = 0; i < MAX_VIRTUAL_IPS; i++) {
     if (virtual_ip_sockets[i].socket_fd >= 0) {
-      // Don't close the FD here - it's already closed or reused
+      // Don't close the FD here - Java owns it and will close it
       printf("Clearing virtual IP socket mapping %d: %s -> %s (fd=%d)\n", 
              i, virtual_ip_sockets[i].virtual_ip, 
              virtual_ip_sockets[i].real_ip, 
@@ -1670,18 +1680,6 @@ void srtla_clear_all_sockets() {
     virtual_ip_sockets[i].network_type = 0;
   }
   virtual_ip_count = 0;
-  
-  // Also clear the connections list without closing FDs
-  // FDs are already closed by the main loop or are stale from previous session
-  printf("Clearing connection list (without closing FDs)\n");
-  while (conns != NULL) {
-    conn_t *next = conns->next;
-    // Don't close FD - it's either already closed or reused by system
-    free(conns);
-    conns = next;
-  }
-  conns = NULL;
-  printf("Connection list cleared\n");
 }
 
 #endif // ANDROID
