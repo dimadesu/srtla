@@ -84,6 +84,9 @@ typedef struct conn {
   network_type_t network_type;
   char virtual_ip[16];
   char real_ip[16];
+  struct sockaddr dest_addr; // Per-connection destination (Moblink relay endpoint)
+  int has_custom_dest;       // 1 = send to dest_addr instead of global srtla_addr
+  char display_name[32];     // Human-readable label for stats UI (e.g. relay name)
 #endif
   int removed;
   int in_flight_pkts;
@@ -131,6 +134,9 @@ typedef struct virtual_conn {
     network_type_t network_type; // WIFI or CELLULAR
     int socket_fd;               // Pre-bound network socket from Android
     struct sockaddr real_addr;   // Real network address
+    struct sockaddr dest_addr;   // Per-connection destination (Moblink relay endpoint)
+    int has_custom_dest;         // 1 = relay connection with a custom destination
+    char display_name[32];       // Human-readable label for stats UI (e.g. relay name)
     struct virtual_conn *next;
 } virtual_conn_t;
 
@@ -214,6 +220,56 @@ void srtla_set_network_socket(const char* virtual_ip, const char* real_ip,
                              int network_type, int socket_fd) {
     add_virtual_connection(virtual_ip, real_ip, (network_type_t)network_type, socket_fd);
 }
+
+// Add a Moblink relay connection. The socket is pre-bound to the local network
+// (typically Wi-Fi) by Java; unlike a normal connection, packets are sent to the
+// relay's tunnel endpoint instead of the global SRTLA receiver address.
+int add_relay_connection(const char* virtual_ip, const char* relay_ip,
+                         int relay_port, int socket_fd, const char* name) {
+    virtual_conn_t *vc = malloc(sizeof(virtual_conn_t));
+    if (!vc) return -1;
+
+    memset(vc, 0, sizeof(virtual_conn_t));
+    strncpy(vc->virtual_ip, virtual_ip, sizeof(vc->virtual_ip)-1);
+    strncpy(vc->real_ip, relay_ip, sizeof(vc->real_ip)-1);
+    vc->network_type = NETWORK_TYPE_WIFI;
+    vc->socket_fd = socket_fd;
+
+    // Display name for stats UI
+    if (name && name[0] != '\0') {
+        strncpy(vc->display_name, name, sizeof(vc->display_name)-1);
+    } else {
+        strncpy(vc->display_name, "RELAY", sizeof(vc->display_name)-1);
+    }
+
+    // real_addr is unused for sending on relay connections (dest_addr is used),
+    // but keep the family valid for any logging/inspection.
+    struct sockaddr_in *real = (struct sockaddr_in*)&vc->real_addr;
+    real->sin_family = AF_INET;
+
+    // Destination is the relay's tunnel endpoint.
+    struct sockaddr_in *dst = (struct sockaddr_in*)&vc->dest_addr;
+    dst->sin_family = AF_INET;
+    dst->sin_port = htons((uint16_t)relay_port);
+    if (inet_pton(AF_INET, relay_ip, &dst->sin_addr) != 1) {
+        free(vc);
+        return -1;
+    }
+    vc->has_custom_dest = 1;
+
+    vc->next = virtual_connections;
+    virtual_connections = vc;
+
+    info("Added Moblink relay connection: %s -> relay %s:%d '%s' (fd=%d)\n",
+         virtual_ip, relay_ip, relay_port, vc->display_name, socket_fd);
+    return 0;
+}
+
+// JNI function to register a Moblink relay's pre-bound socket and endpoint
+void srtla_set_relay_socket(const char* virtual_ip, const char* relay_ip,
+                            int relay_port, int socket_fd, const char* name) {
+    add_relay_connection(virtual_ip, relay_ip, relay_port, socket_fd, name);
+}
 #endif
 
 struct sockaddr srtla_addr, srt_addr;
@@ -273,6 +329,15 @@ void print_help() {
 srtla registration helpers
 
 */
+/* Returns the destination address for a connection: a per-connection relay
+   endpoint when set (Moblink), otherwise the global SRTLA receiver address. */
+static struct sockaddr *conn_dest(conn_t *c) {
+#ifdef ANDROID
+  if (c->has_custom_dest) return &c->dest_addr;
+#endif
+  return &srtla_addr;
+}
+
 int send_reg1(conn_t *c) {
   if (c->fd < 0) return -1;
 
@@ -281,7 +346,7 @@ int send_reg1(conn_t *c) {
   memcpy(buf, &packet_type, sizeof(packet_type));
   memcpy(buf + sizeof(packet_type), srtla_id, SRTLA_ID_LEN);
 
-  int ret = sendto(c->fd, buf, SRTLA_TYPE_REG1_LEN, 0, &srtla_addr, addr_len);
+  int ret = sendto(c->fd, buf, SRTLA_TYPE_REG1_LEN, 0, conn_dest(c), addr_len);
   if (ret != SRTLA_TYPE_REG1_LEN) return -1;
 
   return 0;
@@ -295,7 +360,7 @@ int send_reg2(conn_t *c) {
   memcpy(buf, &packet_type, sizeof(packet_type));
   memcpy(buf + sizeof(packet_type), srtla_id, SRTLA_ID_LEN);
 
-  int ret = sendto(c->fd, buf, SRTLA_TYPE_REG2_LEN, 0, &srtla_addr, addr_len);
+  int ret = sendto(c->fd, buf, SRTLA_TYPE_REG2_LEN, 0, conn_dest(c), addr_len);
   return (ret == SRTLA_TYPE_REG2_LEN) ? 0 : -1;
 }
 
@@ -375,7 +440,7 @@ void handle_srt_data(int fd) {
   conn_t *c = select_conn();
   if (c) {
     int32_t sn = get_srt_sn(buf, n);
-    int ret = sendto(c->fd, &buf, n, 0, &srtla_addr, addr_len);
+    int ret = sendto(c->fd, &buf, n, 0, conn_dest(c), addr_len);
     if (ret == n) {
       // Track bytes sent for bitrate calculation
       update_connection_bitrate(c, n);
@@ -673,6 +738,15 @@ int setup_conns(char *source_ip_file) {
         if (is_virtual_ip(line)) {
           strncpy(c->virtual_ip, line, sizeof(c->virtual_ip)-1);
           printf("Configured virtual IP: %s\n", c->virtual_ip);
+          // Copy display name from virtual connection (for relay name in stats)
+          virtual_conn_t *vc = find_virtual_connection(line);
+          if (vc) {
+            strncpy(c->display_name, vc->display_name, sizeof(c->display_name)-1);
+            c->has_custom_dest = vc->has_custom_dest;
+            if (vc->has_custom_dest) {
+              memcpy(&c->dest_addr, &vc->dest_addr, sizeof(c->dest_addr));
+            }
+          }
         } else {
           c->virtual_ip[0] = '\0';  // Clear virtual IP for real IPs
         }
@@ -746,6 +820,11 @@ int open_socket(conn_t *c, int quiet) {
       c->network_type = vc->network_type;
       memcpy(&c->real_src, &vc->real_addr, sizeof(c->real_src));
       strncpy(c->real_ip, vc->real_ip, sizeof(c->real_ip)-1);
+      c->has_custom_dest = vc->has_custom_dest;
+      if (vc->has_custom_dest) {
+        memcpy(&c->dest_addr, &vc->dest_addr, sizeof(c->dest_addr));
+      }
+      strncpy(c->display_name, vc->display_name, sizeof(c->display_name)-1);
       
       add_active_fd(c->fd);
       
@@ -819,7 +898,7 @@ void send_keepalive(conn_t *c) {
   debug("%s (%p): sending keepalive\n", print_addr(&c->src), c);
   uint16_t pkt = htobe16(SRTLA_TYPE_KEEPALIVE);
   // ignoring the result on purpose
-  sendto(c->fd, &pkt, sizeof(pkt), 0, &srtla_addr, addr_len);
+  sendto(c->fd, &pkt, sizeof(pkt), 0, conn_dest(c), addr_len);
 }
 
 #define HOUSEKEEPING_INT 1000 // ms
@@ -1437,7 +1516,9 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
     // For sender, a connection is active if:
     // Determine connection type based on virtual IP or real IP
     const char* conn_type = "UNKNOWN";
-    if (c->virtual_ip[0] != '\0') {
+    if (c->display_name[0] != '\0') {
+      conn_type = c->display_name;
+    } else if (c->virtual_ip[0] != '\0') {
       // Use virtual IP to determine type
       if (strcmp(c->virtual_ip, "10.0.1.1") == 0) {
         conn_type = "WIFI";
@@ -1538,7 +1619,9 @@ int srtla_get_connection_bitrates(double* bitrates_mbps, char connection_types[]
     
     // Get connection type
     const char* conn_type = "UNKNOWN";
-    if (c->virtual_ip[0] != '\0') {
+    if (c->display_name[0] != '\0') {
+      conn_type = c->display_name;
+    } else if (c->virtual_ip[0] != '\0') {
       if (strcmp(c->virtual_ip, "10.0.1.1") == 0) {
         conn_type = "WIFI";
       } else if (strcmp(c->virtual_ip, "10.0.2.1") == 0) {
