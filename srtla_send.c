@@ -1488,7 +1488,6 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
   }
   
   int pos = 0;
-  int conn_num = 0;
   
   // Add total bitrate header
   double total_bitrate = calculate_total_bitrate();
@@ -1496,8 +1495,6 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
   
   for (conn_t *c = conns; c != NULL; c = c->next) {
     if (c->removed) continue;
-    
-    conn_num++;
     
     // Get connection addresses as strings
     char real_addr_str[64] = "unknown";
