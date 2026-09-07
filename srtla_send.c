@@ -69,7 +69,9 @@
 typedef enum {
     NETWORK_TYPE_UNKNOWN = 0,
     NETWORK_TYPE_WIFI = 1,
-    NETWORK_TYPE_CELLULAR = 2
+    NETWORK_TYPE_CELLULAR = 2,
+    NETWORK_TYPE_ETHERNET = 3,
+    NETWORK_TYPE_USB = 4
 } network_type_t;
 #endif
 
@@ -1523,6 +1525,8 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
         conn_type = "CELLULAR";
       } else if (strcmp(c->virtual_ip, "10.0.3.1") == 0) {
         conn_type = "ETHERNET";
+      } else if (strcmp(c->virtual_ip, "10.0.4.1") == 0) {
+        conn_type = "USB";
       }
     } else {
       // Fallback: try to guess from real IP patterns
@@ -1625,6 +1629,8 @@ int srtla_get_connection_bitrates(double* bitrates_mbps, char connection_types[]
         conn_type = "CELLULAR";
       } else if (strcmp(c->virtual_ip, "10.0.3.1") == 0) {
         conn_type = "ETHERNET";
+      } else if (strcmp(c->virtual_ip, "10.0.4.1") == 0) {
+        conn_type = "USB";
       }
     }
     strncpy(connection_types[conn_count], conn_type, 15);
@@ -1686,6 +1692,8 @@ int srtla_get_connection_window_data(double* bitrates_mbps, char connection_type
         conn_type = "CELLULAR";
       } else if (strcmp(c->virtual_ip, "10.0.3.1") == 0) {
         conn_type = "ETHERNET";
+      } else if (strcmp(c->virtual_ip, "10.0.4.1") == 0) {
+        conn_type = "USB";
       }
     }
     strncpy(connection_types[conn_count], conn_type, 15);
