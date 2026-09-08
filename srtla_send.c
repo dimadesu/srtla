@@ -133,7 +133,7 @@ extern int srtla_is_java_owned_fd(int fd);
 typedef struct virtual_conn {
     char virtual_ip[16];          // e.g., "10.0.1.1"
     char real_ip[16];            // e.g., "172.20.10.2"  
-    network_type_t network_type; // WIFI or CELLULAR
+    network_type_t network_type; // WIFI, CELLULAR, ETHERNET, or USB
     int socket_fd;               // Pre-bound network socket from Android
     struct sockaddr real_addr;   // Real network address
     struct sockaddr dest_addr;   // Per-connection destination (Moblink relay endpoint)
@@ -1545,7 +1545,8 @@ int srtla_get_connection_details(char* buffer, int buffer_size) {
         } else if ((ip & 0xFF000000U) == 0x0A000000U &&  // 10.x.x.x range
                    (ip & 0xFFFFFF00U) != 0x0A000100U &&  // Not 10.0.1.x (WiFi virtual)
                    (ip & 0xFFFFFF00U) != 0x0A000200U &&  // Not 10.0.2.x (Cellular virtual)
-                   (ip & 0xFFFFFF00U) != 0x0A000300U) {  // Not 10.0.3.x (Ethernet virtual)
+                   (ip & 0xFFFFFF00U) != 0x0A000300U &&  // Not 10.0.3.x (Ethernet virtual)
+                   (ip & 0xFFFFFF00U) != 0x0A000400U) {  // Not 10.0.4.x (USB virtual)
           // 10.x.x.x but not our virtual IP ranges - likely WiFi
           conn_type = "WIFI";
         } else if ((ip & 0xFF000000U) != 0x7F000000U &&  // Not 127.x.x.x (localhost)
@@ -1744,7 +1745,7 @@ void check_connection_established(void) {
 typedef struct {
   char virtual_ip[INET_ADDRSTRLEN];
   char real_ip[INET_ADDRSTRLEN];
-  int network_type;  // 0=unknown, 1=wifi, 2=cellular
+  int network_type;  // 0=unknown, 1=wifi, 2=cellular, 3=ethernet, 4=usb
   int socket_fd;
 } virtual_ip_socket_t;
 
